@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	"image/jpeg"
-	"image/png"
+	_ "image/jpeg"
+	_ "image/png"
 	"math"
 )
 
@@ -18,19 +18,10 @@ func CalculateSharpness(imageData []byte) (float64, error) {
 	}
 
 	// バイトスライスから画像をデコード
-	reader := bytes.NewReader(imageData)
-	img, _, err := image.Decode(reader)
+	// image.Decodeは、登録されたフォーマット（jpeg, pngなど）を自動的に検出します。
+	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		// JPEGとPNGで再試行
-		reader.Seek(0, 0)
-		img, err = jpeg.Decode(reader)
-		if err != nil {
-			reader.Seek(0, 0)
-			img, err = png.Decode(reader)
-			if err != nil {
-				return 0, fmt.Errorf("画像のデコードに失敗しました: %v", err)
-			}
-		}
+		return 0, fmt.Errorf("画像のデコードに失敗しました: %v", err)
 	}
 
 	// グレースケール画像に変換
