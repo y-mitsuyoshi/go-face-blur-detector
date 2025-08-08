@@ -2,7 +2,10 @@ module github.com/y-mitsuyoshi/go-face-blur-detector
 
 go 1.21
 
-require github.com/gin-gonic/gin v1.9.1
+require (
+	github.com/gin-gonic/gin v1.9.1
+	gocv.io/x/gocv v0.42.0
+)
 
 require (
 	github.com/bytedance/sonic v1.9.1 // indirect
