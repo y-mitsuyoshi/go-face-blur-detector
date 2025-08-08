@@ -21,27 +21,42 @@ OpenCVを使用して顔のブレを検知するAPIサービス
 
 ## インストールと実行
 
-### ローカル開発
+### 前提条件
+
+- Docker
+- Docker Compose（または `docker compose`）
+
+### Docker環境の確認
 
 ```bash
-# 依存関係のインストール
-make deps
+# Docker環境をチェック
+make check-docker
+```
 
+### Docker Compose使用（推奨）
+
+```bash
 # アプリケーションのビルド
 make build
 
 # アプリケーションの実行
 make run
+
+# バックグラウンドで起動
+make up
+
+# 開発モード（ホットリロード）
+make dev
 ```
 
-### Docker使用
+### ローカル開発（Dockerなし）
 
 ```bash
-# Dockerイメージのビルドと実行
-make docker-run
+# 依存関係のインストール
+make deps
 
-# または Docker Composeを使用
-make compose-up
+# アプリケーションのビルドと実行
+make run-local
 ```
 
 ## API エンドポイント
@@ -78,12 +93,19 @@ make compose-up
 ## 使用可能なコマンド
 
 ```bash
-make help          # 利用可能なコマンドを表示
-make build         # アプリケーションをビルド
-make test          # テストを実行
-make docker-build  # Dockerイメージをビルド
-make docker-run    # Dockerコンテナを実行
-make clean         # ビルド成果物をクリーンアップ
+make help           # 利用可能なコマンドを表示
+make build          # Docker Composeでアプリケーションをビルド
+make run            # Docker Composeでアプリケーションを実行
+make dev            # 開発モード（ホットリロード）でアプリケーションを実行
+make up             # バックグラウンドでサービスを起動
+make down           # サービスを停止
+make logs           # ログを表示
+make restart        # サービスを再起動
+make build-local    # ローカルでアプリケーションをビルド
+make run-local      # ローカルでアプリケーションを実行
+make test           # テストを実行
+make clean          # ビルド成果物をクリーンアップ
+make check-docker   # Docker環境の確認
 ```
 
 ## 開発
@@ -97,7 +119,10 @@ make clean         # ビルド成果物をクリーンアップ
 
 ```bash
 # 開発用コンテナでホットリロード
-docker-compose --profile dev up face-blur-detector-dev
+make dev
+
+# または直接Docker Composeを使用
+docker compose --profile dev up face-blur-detector-dev
 ```
 
 ## ライセンス

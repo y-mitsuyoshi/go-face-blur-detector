@@ -22,28 +22,30 @@ SRC_DIR := ./cmd/api
 # Docker compose ファイル
 DOCKER_COMPOSE_FILE := docker-compose.yml
 
-.PHONY: all build clean test run docker-build docker-run docker-stop docker-clean help deps tidy fmt lint
+.PHONY: all build run build-local run-local clean test help deps tidy fmt lint dev up down logs restart check-docker
 
 # デフォルトターゲット
-all: clean deps tidy fmt test build
+all: build
 
 # ヘルプ表示
 help:
 	@echo "利用可能なコマンド:"
-	@echo "  build          - アプリケーションをビルド"
+	@echo "  build          - Docker Composeでアプリケーションをビルド"
+	@echo "  run            - Docker Composeでアプリケーションを実行"
+	@echo "  dev            - 開発モードでアプリケーションを実行"
+	@echo "  up             - Docker Composeでサービスを起動（バックグラウンド）"
+	@echo "  down           - Docker Composeでサービスを停止"
+	@echo "  logs           - Docker Composeのログを表示"
+	@echo "  restart        - Docker Composeでサービスを再起動"
+	@echo "  build-local    - ローカルでアプリケーションをビルド"
+	@echo "  run-local      - ローカルでアプリケーションを実行"
 	@echo "  clean          - ビルド成果物をクリーンアップ"
 	@echo "  test           - テストを実行"
-	@echo "  run            - アプリケーションを実行"
 	@echo "  deps           - 依存関係を更新"
 	@echo "  tidy           - go.modを整理"
 	@echo "  fmt            - コードをフォーマット"
 	@echo "  lint           - コードをリント"
-	@echo "  docker-build   - Dockerイメージをビルド"
-	@echo "  docker-run     - Dockerコンテナを実行"
-	@echo "  docker-stop    - Dockerコンテナを停止"
-	@echo "  docker-clean   - Dockerイメージとコンテナをクリーンアップ"
-	@echo "  compose-up     - Docker Composeでサービスを起動"
-	@echo "  compose-down   - Docker Composeでサービスを停止"
+	@echo "  check-docker   - Docker環境の確認"
 
 # 依存関係の更新
 deps:
@@ -81,15 +83,59 @@ test-coverage:
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 	@echo "カバレッジレポートがcoverage.htmlに生成されました"
 
-# ビルド
-build:
-	@echo "アプリケーションをビルド中..."
+# Docker設定
+DOCKER_COMPOSE_CMD := docker compose
+
+# Dockerの利用可能性をチェック
+check-docker:
+	@docker --version >/dev/null 2>&1 || (echo "Dockerがインストールされていません。Dockerをインストールしてください。" && exit 1)
+	@docker info >/dev/null 2>&1 || (echo "Dockerが実行されていません。Dockerを起動してください。" && exit 1)
+	@echo "Docker環境: OK"
+
+# Docker Composeでビルド
+build: check-docker
+	@echo "Docker Composeでアプリケーションをビルド中..."
+	$(DOCKER_COMPOSE_CMD) build
+
+# Docker Composeで実行
+run: check-docker
+	@echo "Docker Composeでアプリケーションを実行中..."
+	$(DOCKER_COMPOSE_CMD) up
+
+# 開発モードで実行
+dev: check-docker
+	@echo "開発モードでアプリケーションを実行中..."
+	$(DOCKER_COMPOSE_CMD) --profile dev up face-blur-detector-dev
+
+# Docker Composeでサービスを起動（バックグラウンド）
+up: check-docker
+	@echo "Docker Composeでサービスを起動中..."
+	$(DOCKER_COMPOSE_CMD) up -d
+
+# Docker Composeでサービスを停止
+down:
+	@echo "Docker Composeでサービスを停止中..."
+	$(DOCKER_COMPOSE_CMD) down
+
+# Docker Composeのログを表示
+logs:
+	@echo "Docker Composeのログを表示中..."
+	$(DOCKER_COMPOSE_CMD) logs -f
+
+# Docker Composeでサービスを再起動
+restart:
+	@echo "Docker Composeでサービスを再起動中..."
+	$(DOCKER_COMPOSE_CMD) restart
+
+# ローカルビルド（Dockerなし）
+build-local:
+	@echo "ローカルでアプリケーションをビルド中..."
 	@mkdir -p bin
 	CGO_ENABLED=1 $(GOBUILD) -o $(BINARY_PATH) $(SRC_DIR)
 
-# ローカル実行
-run: build
-	@echo "アプリケーションを実行中..."
+# ローカル実行（Dockerなし）
+run-local: build-local
+	@echo "ローカルでアプリケーションを実行中..."
 	$(BINARY_PATH)
 
 # クリーンアップ
@@ -98,46 +144,7 @@ clean:
 	$(GOCLEAN)
 	@rm -rf bin/
 	@rm -f coverage.out coverage.html
-
-# Dockerイメージをビルド
-docker-build:
-	@echo "Dockerイメージをビルド中..."
-	docker build -t $(DOCKER_IMAGE) -t $(DOCKER_IMAGE_LATEST) .
-
-# Dockerコンテナを実行
-docker-run: docker-build
-	@echo "Dockerコンテナを実行中..."
-	docker run --rm -p 8080:8080 --name $(PROJECT_NAME) $(DOCKER_IMAGE_LATEST)
-
-# Dockerコンテナを停止
-docker-stop:
-	@echo "Dockerコンテナを停止中..."
-	@docker stop $(PROJECT_NAME) 2>/dev/null || true
-
-# Dockerイメージとコンテナをクリーンアップ
-docker-clean: docker-stop
-	@echo "Dockerイメージとコンテナをクリーンアップ中..."
-	@docker rm $(PROJECT_NAME) 2>/dev/null || true
-	@docker rmi $(DOCKER_IMAGE) $(DOCKER_IMAGE_LATEST) 2>/dev/null || true
-	@docker system prune -f
-
-# Docker Composeでサービスを起動
-compose-up:
-	@echo "Docker Composeでサービスを起動中..."
-	@if [ -f $(DOCKER_COMPOSE_FILE) ]; then \
-		docker-compose up -d; \
-	else \
-		echo "$(DOCKER_COMPOSE_FILE)が見つかりません"; \
-	fi
-
-# Docker Composeでサービスを停止
-compose-down:
-	@echo "Docker Composeでサービスを停止中..."
-	@if [ -f $(DOCKER_COMPOSE_FILE) ]; then \
-		docker-compose down; \
-	else \
-		echo "$(DOCKER_COMPOSE_FILE)が見つかりません"; \
-	fi
+	$(DOCKER_COMPOSE_CMD) down --rmi all --volumes --remove-orphans 2>/dev/null || true
 
 # 開発環境の初期化
 dev-init:
@@ -145,12 +152,7 @@ dev-init:
 	$(GOMOD) init $(PROJECT_NAME) 2>/dev/null || true
 	$(MAKE) deps
 	$(MAKE) tidy
-
-# プロダクションビルド
-build-prod:
-	@echo "プロダクション用ビルドを実行中..."
-	@mkdir -p bin
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_PATH) $(SRC_DIR)
+	$(DOCKER_COMPOSE_CMD) build
 
 # バージョン情報表示
 version:

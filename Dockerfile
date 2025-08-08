@@ -8,16 +8,16 @@ RUN apk add --no-cache \
     musl-dev \
     pkgconfig \
     opencv-dev \
-    opencv-contrib-dev
+    ca-certificates
 
 # 作業ディレクトリを設定
 WORKDIR /app
 
 # Go modulesファイルをコピー
-COPY go.mod go.sum ./
+COPY go.mod ./
 
 # 依存関係をダウンロード
-RUN go mod download
+RUN go mod download && go mod tidy
 
 # ソースコードをコピー
 COPY . .
@@ -31,7 +31,6 @@ FROM alpine:latest
 # OpenCVランタイムライブラリをインストール
 RUN apk add --no-cache \
     opencv \
-    opencv-contrib \
     ca-certificates
 
 # 非rootユーザーを作成

@@ -8,7 +8,6 @@ RUN apk add --no-cache \
     musl-dev \
     pkgconfig \
     opencv-dev \
-    opencv-contrib-dev \
     git \
     curl \
     wget
