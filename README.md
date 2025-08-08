@@ -72,23 +72,46 @@ make run-local
 **レスポンス:**
 ```json
 {
-  "faces": [
-    {
-      "x": 100,
-      "y": 150,
-      "width": 120,
-      "height": 120,
-      "sharpness_score": 85.6,
-      "is_blurred": false
-    }
-  ],
-  "total_faces": 1
+  "sharpness_score": 85.6
 }
 ```
 
 ### GET /health
 
 ヘルスチェック用エンドポイント
+
+### APIのテスト
+
+`curl`コマンドを使用して、APIエンドポイントをテストできます。プロジェクトのルートディレクトリにいることを確認してください。
+`test.png`と`test_blurred.png`は`internal/facedetector/testdata/`にあります。
+
+**鮮明な画像のテスト:**
+
+```bash
+curl -X POST -F "image=@internal/facedetector/testdata/test.png" http://localhost:8080/detect
+```
+
+**ぼやけた画像のテスト:**
+
+```bash
+curl -X POST -F "image=@internal/facedetector/testdata/test_blurred.png" http://localhost:8080/detect
+```
+
+**期待されるレスポンス:**
+
+鮮明な画像は、ぼやけた画像よりも高い`sharpness_score`を返すはずです。
+
+```json
+// 鮮明な画像の例
+{
+  "sharpness_score": 234.56
+}
+
+// ぼやけた画像の例
+{
+  "sharpness_score": 78.90
+}
+```
 
 ## 使用可能なコマンド
 
