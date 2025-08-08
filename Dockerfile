@@ -1,60 +1,61 @@
-# マルチステージビルド用のベースイメージ
-FROM golang:1.21-alpine AS builder
+# マルチステージビルド - ビルドステージ
+FROM ubuntu:24.04 AS builder
 
-# 必要なパッケージをインストール
-RUN apk add --no-cache \
-    gcc \
-    g++ \
-    musl-dev \
-    pkgconfig \
-    opencv-dev \
-    ca-certificates
+# パッケージリストを更新し、必要なライブラリをインストール
+RUN apt-get update && apt-get install -y \
+    golang-1.21 \
+    git \
+    build-essential \
+    pkg-config \
+    libopencv-dev \
+    libopencv-contrib-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Goのパスを設定
+ENV PATH="/usr/lib/go-1.21/bin:${PATH}"
+ENV GOPATH="/go"
+ENV GOROOT="/usr/lib/go-1.21"
 
 # 作業ディレクトリを設定
 WORKDIR /app
 
-# Go modulesファイルをコピー
-COPY go.mod ./
-
-# 依存関係をダウンロード
-RUN go mod download && go mod tidy
+# Go modulesファイルをコピーして依存関係をダウンロード
+COPY go.mod go.sum ./
+RUN go mod download
 
 # ソースコードをコピー
 COPY . .
 
-# アプリケーションをビルド
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o main ./cmd/api
+# アプリケーションをビルド（Arucoコンポーネントを無効にして）
+ENV CGO_CPPFLAGS="-I/usr/include/opencv4"
+ENV CGO_LDFLAGS="-lopencv_core -lopencv_imgproc -lopencv_imgcodecs"
+ENV GOCV_SKIP_ARUCO=1
+RUN CGO_ENABLED=1 go build -tags=no_aruco -o face-blur-detector ./cmd/api
 
-# 本番用イメージ
-FROM alpine:latest
+# 実行ステージ
+FROM ubuntu:24.04
 
-# OpenCVランタイムライブラリをインストール
-RUN apk add --no-cache \
-    opencv \
-    ca-certificates
+# パッケージリストを更新し、必要なライブラリをインストール
+RUN apt-get update && apt-get install -y \
+    libopencv-core406 \
+    libopencv-imgproc406 \
+    libopencv-imgcodecs406 \
+    libopencv-objdetect406 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# 非rootユーザーを作成
-RUN addgroup -g 1001 -S appgroup && \
-    adduser -u 1001 -S appuser -G appgroup
+# ビルドステージからバイナリをコピー
+COPY --from=builder /app/face-blur-detector /usr/local/bin/face-blur-detector
 
-# 作業ディレクトリを作成
-WORKDIR /app
-
-# ビルダーステージからバイナリをコピー
-COPY --from=builder /app/main .
-
-# アプリケーションディレクトリの所有者を変更
-RUN chown -R appuser:appgroup /app
-
-# 非rootユーザーに切り替え
-USER appuser
+# 実行権限を付与
+RUN chmod +x /usr/local/bin/face-blur-detector
 
 # ポート8080を公開
 EXPOSE 8080
 
-# ヘルスチェック
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+# 環境変数のデフォルト値を設定
+ENV PORT=8080
+ENV LOG_LEVEL=INFO
 
 # アプリケーションを実行
-CMD ["./main"]
+CMD ["face-blur-detector"]
