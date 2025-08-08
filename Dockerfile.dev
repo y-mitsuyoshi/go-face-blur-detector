@@ -1,19 +1,23 @@
 # 開発用Dockerfile
-FROM golang:1.21-alpine
+FROM ubuntu:24.04
 
-# 必要なパッケージをインストール
-RUN apk add --no-cache \
-    gcc \
-    g++ \
-    musl-dev \
-    pkgconfig \
-    opencv-dev \
+# パッケージリストを更新し、必要なライブラリをインストール
+RUN apt-get update && apt-get install -y \
+    golang-1.21 \
     git \
+    build-essential \
+    pkg-config \
+    libopencv-dev \
+    libopencv-contrib-dev \
     curl \
-    wget
+    wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# air（ホットリロード用）をインストール
-RUN go install github.com/cosmtrek/air@latest
+# Goのパスを設定
+ENV PATH="/usr/lib/go-1.21/bin:${PATH}"
+ENV GOPATH="/go"
+ENV GOROOT="/usr/lib/go-1.21"
 
 # 作業ディレクトリを設定
 WORKDIR /app

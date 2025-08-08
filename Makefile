@@ -4,25 +4,10 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.
 DOCKER_IMAGE := $(PROJECT_NAME):$(VERSION)
 DOCKER_IMAGE_LATEST := $(PROJECT_NAME):latest
 
-# Goの設定
-GOCMD := go
-GOBUILD := $(GOCMD) build
-GOCLEAN := $(GOCMD) clean
-GOTEST := $(GOCMD) test
-GOGET := $(GOCMD) get
-GOMOD := $(GOCMD) mod
-
-# バイナリ名
-BINARY_NAME := face-blur-detector
-BINARY_PATH := ./bin/$(BINARY_NAME)
-
-# ソースディレクトリ
-SRC_DIR := ./cmd/api
-
 # Docker compose ファイル
 DOCKER_COMPOSE_FILE := docker-compose.yml
 
-.PHONY: all build run build-local run-local clean test help deps tidy fmt lint dev up down logs restart check-docker
+.PHONY: all build run clean test help deps tidy fmt lint dev up down stop logs restart check-docker test-coverage
 
 # デフォルトターゲット
 all: build
@@ -35,52 +20,47 @@ help:
 	@echo "  dev            - 開発モードでアプリケーションを実行"
 	@echo "  up             - Docker Composeでサービスを起動（バックグラウンド）"
 	@echo "  down           - Docker Composeでサービスを停止"
+	@echo "  stop           - Docker Composeでサービスを停止"
 	@echo "  logs           - Docker Composeのログを表示"
 	@echo "  restart        - Docker Composeでサービスを再起動"
-	@echo "  build-local    - ローカルでアプリケーションをビルド"
-	@echo "  run-local      - ローカルでアプリケーションを実行"
+	@echo "  test           - Docker Composeでテストを実行"
+	@echo "  test-coverage  - Docker Composeでテストカバレッジを取得"
+	@echo "  deps           - Docker Composeで依存関係を更新"
+	@echo "  tidy           - Docker Composeでgo.modを整理"
+	@echo "  fmt            - Docker Composeでコードをフォーマット"
+	@echo "  lint           - Docker Composeでコードをリント"
 	@echo "  clean          - ビルド成果物をクリーンアップ"
-	@echo "  test           - テストを実行"
-	@echo "  deps           - 依存関係を更新"
-	@echo "  tidy           - go.modを整理"
-	@echo "  fmt            - コードをフォーマット"
-	@echo "  lint           - コードをリント"
 	@echo "  check-docker   - Docker環境の確認"
 
 # 依存関係の更新
-deps:
-	@echo "依存関係を更新中..."
-	$(GOGET) -u ./...
+deps: check-docker
+	@echo "Docker Composeで依存関係を更新中..."
+	$(DOCKER_COMPOSE_CMD) --profile dev run --rm face-blur-detector-dev go get -u ./...
 
 # go.modを整理
-tidy:
-	@echo "go.modを整理中..."
-	$(GOMOD) tidy
+tidy: check-docker
+	@echo "Docker Composeでgo.modを整理中..."
+	$(DOCKER_COMPOSE_CMD) --profile dev run --rm face-blur-detector-dev go mod tidy
 
 # コードフォーマット
-fmt:
-	@echo "コードをフォーマット中..."
-	$(GOCMD) fmt ./...
+fmt: check-docker
+	@echo "Docker Composeでコードをフォーマット中..."
+	$(DOCKER_COMPOSE_CMD) --profile dev run --rm face-blur-detector-dev go fmt ./...
 
 # コードリント（golangci-lintが必要）
-lint:
-	@echo "コードをリント中..."
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
-	else \
-		echo "golangci-lintがインストールされていません。'go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest'でインストールしてください。"; \
-	fi
+lint: check-docker
+	@echo "Docker Composeでコードをリント中..."
+	$(DOCKER_COMPOSE_CMD) --profile dev run --rm face-blur-detector-dev sh -c "go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && golangci-lint run"
 
 # テスト実行
-test:
-	@echo "テストを実行中..."
-	$(GOTEST) -v ./...
+test: check-docker
+	@echo "Docker Composeでテストを実行中..."
+	$(DOCKER_COMPOSE_CMD) --profile test run --rm test
 
 # テストカバレッジ
-test-coverage:
-	@echo "テストカバレッジを取得中..."
-	$(GOTEST) -coverprofile=coverage.out ./...
-	$(GOCMD) tool cover -html=coverage.out -o coverage.html
+test-coverage: check-docker
+	@echo "Docker Composeでテストカバレッジを取得中..."
+	$(DOCKER_COMPOSE_CMD) --profile test run --rm test sh -c "go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out -o coverage.html"
 	@echo "カバレッジレポートがcoverage.htmlに生成されました"
 
 # Docker設定
@@ -117,6 +97,11 @@ down:
 	@echo "Docker Composeでサービスを停止中..."
 	$(DOCKER_COMPOSE_CMD) down
 
+# Docker Composeでサービスを停止（stopコマンド）
+stop:
+	@echo "Docker Composeでサービスを停止中..."
+	$(DOCKER_COMPOSE_CMD) stop
+
 # Docker Composeのログを表示
 logs:
 	@echo "Docker Composeのログを表示中..."
@@ -127,29 +112,16 @@ restart:
 	@echo "Docker Composeでサービスを再起動中..."
 	$(DOCKER_COMPOSE_CMD) restart
 
-# ローカルビルド（Dockerなし）
-build-local:
-	@echo "ローカルでアプリケーションをビルド中..."
-	@mkdir -p bin
-	CGO_ENABLED=1 $(GOBUILD) -o $(BINARY_PATH) $(SRC_DIR)
-
-# ローカル実行（Dockerなし）
-run-local: build-local
-	@echo "ローカルでアプリケーションを実行中..."
-	$(BINARY_PATH)
-
 # クリーンアップ
-clean:
+clean: check-docker
 	@echo "ビルド成果物をクリーンアップ中..."
-	$(GOCLEAN)
-	@rm -rf bin/
 	@rm -f coverage.out coverage.html
 	$(DOCKER_COMPOSE_CMD) down --rmi all --volumes --remove-orphans 2>/dev/null || true
 
 # 開発環境の初期化
-dev-init:
+dev-init: check-docker
 	@echo "開発環境を初期化中..."
-	$(GOMOD) init $(PROJECT_NAME) 2>/dev/null || true
+	$(DOCKER_COMPOSE_CMD) --profile dev run --rm face-blur-detector-dev sh -c "go mod init $(PROJECT_NAME) 2>/dev/null || true"
 	$(MAKE) deps
 	$(MAKE) tidy
 	$(DOCKER_COMPOSE_CMD) build
