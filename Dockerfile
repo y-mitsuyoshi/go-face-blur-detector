@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libopencv-dev \
     libopencv-contrib-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Goのパスを設定
@@ -20,28 +21,30 @@ ENV GOROOT="/usr/lib/go-1.21"
 WORKDIR /app
 
 # Go modulesファイルをコピーして依存関係をダウンロード
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
 
 # ソースコードをコピー
 COPY . .
 
+# 依存関係を整理
+RUN go mod tidy
+
 # アプリケーションをビルド（Arucoコンポーネントを無効にして）
 ENV CGO_CPPFLAGS="-I/usr/include/opencv4"
-ENV CGO_LDFLAGS="-lopencv_core -lopencv_imgproc -lopencv_imgcodecs"
-ENV GOCV_SKIP_ARUCO=1
-RUN CGO_ENABLED=1 go build -tags=no_aruco -o face-blur-detector ./cmd/api
+ENV CGO_LDFLAGS="-lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_objdetect"
+ENV PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig"
+RUN CGO_ENABLED=1 go build -tags "!aruco" -ldflags "-s -w" -o face-blur-detector ./cmd/api
 
 # 実行ステージ
 FROM ubuntu:24.04
 
 # パッケージリストを更新し、必要なライブラリをインストール
 RUN apt-get update && apt-get install -y \
-    libopencv-core406 \
-    libopencv-imgproc406 \
-    libopencv-imgcodecs406 \
-    libopencv-objdetect406 \
+    libopencv-dev \
+    libopencv-contrib-dev \
     ca-certificates \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # ビルドステージからバイナリをコピー
