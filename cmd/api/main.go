@@ -71,6 +71,36 @@ func main() {
 		})
 	})
 
+	// 顔検出（顔のみ）エンドポイント
+	r.POST("/detect/face", func(c *gin.Context) {
+		// multipart/form-dataから画像ファイルを取得
+		file, _, err := c.Request.FormFile("image")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "画像ファイルの取得に失敗しました: " + err.Error()})
+			return
+		}
+		defer file.Close()
+
+		// ファイルの内容を読み込む
+		imgData, err := io.ReadAll(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "画像の読み込みに失敗しました: " + err.Error()})
+			return
+		}
+
+		// 顔の鮮明度を計算
+		sharpness, err := facedetector.CalculateFaceSharpness(imgData)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "鮮明度の計算に失敗しました: " + err.Error()})
+			return
+		}
+
+		// 結果を返す
+		c.JSON(http.StatusOK, gin.H{
+			"sharpness_score": sharpness,
+		})
+	})
+
 	log.Printf("サーバーをポート %s で起動中...", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatal("サーバーの起動に失敗しました:", err)

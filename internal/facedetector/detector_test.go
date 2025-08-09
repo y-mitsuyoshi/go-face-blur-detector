@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	"testing"
 )
 
@@ -129,4 +130,33 @@ func TestCalculateSharpness(t *testing.T) {
 		}
 		t.Logf("Sharp score: %f, Blurred score: %f", sharpScore, blurredScore)
 	})
+}
+
+func TestCalculateFaceSharpness(t *testing.T) {
+	// テスト用の顔写真画像を読み込む
+	faceImgData, err := os.ReadFile("testdata/face.jpg")
+	if err != nil {
+		t.Fatalf("テスト画像の読み込みに失敗しました: %v", err)
+	}
+
+	// 顔画像の鮮明度を計算
+	sharpness, err := CalculateFaceSharpness(faceImgData)
+	if err != nil {
+		t.Fatalf("顔画像の鮮明度計算に失敗しました: %v", err)
+	}
+
+	// スコアが0より大きいことを確認
+	if sharpness <= 0 {
+		t.Errorf("顔画像のスコア (%f) が0より大きくありません", sharpness)
+	}
+	t.Logf("顔画像のスコア: %f", sharpness)
+
+	// 顔が検出されない画像をテスト
+	noFaceImgData := createTestImage(100, 100, "sharp") // 顔ではない画像
+	_, err = CalculateFaceSharpness(noFaceImgData)
+	if err == nil {
+		t.Errorf("顔のない画像でエラーが返されませんでした")
+	} else {
+		t.Logf("顔のない画像で期待どおりエラーを検出: %v", err)
+	}
 }

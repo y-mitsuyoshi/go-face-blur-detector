@@ -47,8 +47,12 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# ビルドステージからバイナリをコピー
-COPY --from=builder /app/face-blur-detector /usr/local/bin/face-blur-detector
+# 作業ディレクトリを設定
+WORKDIR /app
+
+# ビルドステージからバイナリとカスケードファイルをコピー
+COPY --from=builder /app/face-blur-detector /usr/local/bin/
+COPY --from=builder /app/internal/facedetector/cascade ./cascade
 
 # 実行権限を付与
 RUN chmod +x /usr/local/bin/face-blur-detector
