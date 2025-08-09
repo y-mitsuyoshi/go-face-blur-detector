@@ -119,11 +119,25 @@ curl -X POST -F "image=@internal/facedetector/testdata/test_blurred.png" http://
 curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" http://localhost:8080/detect/face
 ```
 
+**ぼやけた顔画像のテスト:**
+
+```bash
+curl -X POST -F "image=@internal/facedetector/testdata/face_blurred.jpg" http://localhost:8080/detect/face
+```
+
 **期待されるレスポンス:**
 
+鮮明な顔画像は、ぼやけた顔画像よりも高い`sharpness_score`を返すはずです。
+
 ```json
+// 鮮明な顔画像の例
 {
   "sharpness_score": 123.45
+}
+
+// ぼやけた顔画像の例
+{
+  "sharpness_score": 45.67
 }
 ```
 

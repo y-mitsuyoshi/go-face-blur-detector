@@ -133,23 +133,45 @@ func TestCalculateSharpness(t *testing.T) {
 }
 
 func TestCalculateFaceSharpness(t *testing.T) {
-	// テスト用の顔写真画像を読み込む
-	faceImgData, err := os.ReadFile("testdata/face.jpg")
+	// テスト用の鮮明な顔写真を読み込む
+	sharpFaceImgData, err := os.ReadFile("testdata/face.jpg")
 	if err != nil {
-		t.Fatalf("テスト画像の読み込みに失敗しました: %v", err)
+		t.Fatalf("鮮明な顔画像の読み込みに失敗しました: %v", err)
 	}
 
-	// 顔画像の鮮明度を計算
-	sharpness, err := CalculateFaceSharpness(faceImgData)
+	// 鮮明な顔画像の鮮明度を計算
+	sharpScore, err := CalculateFaceSharpness(sharpFaceImgData)
 	if err != nil {
-		t.Fatalf("顔画像の鮮明度計算に失敗しました: %v", err)
+		t.Fatalf("鮮明な顔画像の鮮明度計算に失敗しました: %v", err)
 	}
 
 	// スコアが0より大きいことを確認
-	if sharpness <= 0 {
-		t.Errorf("顔画像のスコア (%f) が0より大きくありません", sharpness)
+	if sharpScore <= 0 {
+		t.Errorf("鮮明な顔画像のスコア (%f) が0より大きくありません", sharpScore)
 	}
-	t.Logf("顔画像のスコア: %f", sharpness)
+	t.Logf("鮮明な顔画像のスコア: %f", sharpScore)
+
+	// テスト用のぼやけた顔写真を読み込む
+	blurredFaceImgData, err := os.ReadFile("testdata/face_blurred.jpg")
+	if err != nil {
+		t.Fatalf("ぼやけた顔画像の読み込みに失敗しました: %v", err)
+	}
+
+	// ぼやけた顔画像の鮮明度を計算
+	blurredScore, err := CalculateFaceSharpness(blurredFaceImgData)
+	if err != nil {
+		t.Fatalf("ぼやけた顔画像の鮮明度計算に失敗しました: %v", err)
+	}
+
+	if blurredScore <= 0 {
+		t.Errorf("ぼやけた顔画像のスコア (%f) が0より大きくありません", blurredScore)
+	}
+	t.Logf("ぼやけた顔画像のスコア: %f", blurredScore)
+
+	// 鮮明な画像のスコアがぼやけた画像のスコアより高いことを確認
+	if sharpScore <= blurredScore {
+		t.Errorf("鮮明な画像のスコア (%f) がぼやけた画像のスコア (%f) より高くありません", sharpScore, blurredScore)
+	}
 
 	// 顔が検出されない画像をテスト
 	noFaceImgData := createTestImage(100, 100, "sharp") // 顔ではない画像
