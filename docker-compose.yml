@@ -41,5 +41,21 @@ services:
     profiles:
       - dev
 
+  # テスト用サービス
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: face-blur-detector-test
+    environment:
+      - ENV=test
+    volumes:
+      - .:/app
+      - go-mod-cache:/go/pkg/mod
+    working_dir: /app
+    command: go test -v ./...
+    profiles:
+      - test
+
 volumes:
   go-mod-cache:
