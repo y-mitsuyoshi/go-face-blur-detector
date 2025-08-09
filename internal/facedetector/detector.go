@@ -6,8 +6,104 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io/ioutil"
 	"math"
+
+	pigo "github.com/esimov/pigo/core"
 )
+
+var cascadeFile = "cascade/facefinder"
+
+// CalculateFaceSharpness は、画像内の顔の鮮明度スコアを計算します。
+// 複数の顔が検出された場合は、最も高いスコアを返します。
+func CalculateFaceSharpness(imageData []byte) (float64, error) {
+	// カスケードファイル（分類器）を読み込む
+	cascade, err := ioutil.ReadFile(cascadeFile)
+	if err != nil {
+		return 0, fmt.Errorf("カスケードファイルの読み込みに失敗しました: %v", err)
+	}
+
+	// バイトスライスから画像をデコード
+	img, _, err := image.Decode(bytes.NewReader(imageData))
+	if err != nil {
+		return 0, fmt.Errorf("画像のデコードに失敗しました: %v", err)
+	}
+
+	// pigoが要求する画像形式に変換
+	pixels := pigo.RgbToGrayscale(img)
+	cols, rows := img.Bounds().Max.X, img.Bounds().Max.Y
+
+	// pigo分類器を初期化
+	cParams := pigo.CascadeParams{
+		MinSize:     20,
+		MaxSize:     1000,
+		ShiftFactor: 0.1,
+		ScaleFactor: 1.1,
+		ImageParams: pigo.ImageParams{
+			Pixels: pixels,
+			Rows:   rows,
+			Cols:   cols,
+			Dim:    cols,
+		},
+	}
+	pigo := pigo.NewPigo()
+
+	classifier, err := pigo.Unpack(cascade)
+	if err != nil {
+		return 0, fmt.Errorf("カスケードのアンパックに失敗しました: %v", err)
+	}
+
+	// 顔検出を実行
+	angle := 0.0 // 0.0は正面顔のみ
+	dets := classifier.RunCascade(cParams, angle)
+	dets = classifier.ClusterDetections(dets, 0.2)
+
+	if len(dets) == 0 {
+		return 0, fmt.Errorf("顔が検出されませんでした")
+	}
+
+	maxSharpness := 0.0
+	// 検出された各顔に対して鮮明度を計算
+	for _, det := range dets {
+		if det.Scale > 50 {
+			// 顔領域を切り抜く
+			faceRect := image.Rect(
+				det.Col-det.Scale/2,
+				det.Row-det.Scale/2,
+				det.Col+det.Scale/2,
+				det.Row+det.Scale/2,
+			)
+
+			// Goのimage.Imageから顔部分をサブイメージとして切り出す
+			// サブイメージをサポートする型(例: *image.RGBA)に変換が必要
+			// ここでは簡単な実装のため、元の画像から直接ピクセルを読み出す
+			// 注意：この実装は元の画像が*image.Grayでないと正しく動作しない可能性がある
+			// より堅牢な実装では、型アサーションと変換が必要
+			// ここではconvertToGrayscaleがimage.Imageを受け入れるので、サブイメージでなくとも良い
+			bounds := img.Bounds()
+			croppedImg := image.NewRGBA(faceRect)
+
+			for y := faceRect.Min.Y; y < faceRect.Max.Y; y++ {
+				for x := faceRect.Min.X; x < faceRect.Max.X; x++ {
+					if x >= bounds.Min.X && x < bounds.Max.X && y >= bounds.Min.Y && y < bounds.Max.Y {
+						croppedImg.Set(x, y, img.At(x, y))
+					}
+				}
+			}
+			// グレースケール画像に変換
+			grayImg := convertToGrayscale(croppedImg)
+
+			// ラプラシアンフィルタを適用して鮮明度を計算
+			sharpness := calculateLaplacianVariance(grayImg)
+
+			if sharpness > maxSharpness {
+				maxSharpness = sharpness
+			}
+		}
+	}
+
+	return maxSharpness, nil
+}
 
 // CalculateSharpness は、画像データの鮮明度スコアを計算します。
 // スコアが高いほど、画像が鮮明であることを示します。
