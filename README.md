@@ -113,6 +113,20 @@ curl -X POST -F "image=@internal/facedetector/testdata/test_blurred.png" http://
 }
 ```
 
+**顔画像の鮮明度テスト:**
+
+```bash
+curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" http://localhost:8080/detect/face
+```
+
+**期待されるレスポンス:**
+
+```json
+{
+  "sharpness_score": 123.45
+}
+```
+
 ## 使用可能なコマンド
 
 ```bash
