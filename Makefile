@@ -19,8 +19,8 @@ help:
 	@echo "  run            - Docker Composeでアプリケーションを実行"
 	@echo "  dev            - 開発モードでアプリケーションを実行"
 	@echo "  up             - Docker Composeでサービスを起動（バックグラウンド）"
-	@echo "  down           - Docker Composeでサービスを停止"
-	@echo "  stop           - Docker Composeでサービスを停止"
+	@echo "  down           - Docker Composeでサービスを停止し、コンテナとネットワークを削除"
+	@echo "  stop           - Docker Composeでサービスを停止（コンテナは削除されない）"
 	@echo "  logs           - Docker Composeのログを表示"
 	@echo "  restart        - Docker Composeでサービスを再起動"
 	@echo "  test           - Docker Composeでテストを実行"
@@ -92,14 +92,14 @@ up: check-docker
 	@echo "Docker Composeでサービスを起動中..."
 	$(DOCKER_COMPOSE_CMD) up -d
 
-# Docker Composeでサービスを停止
+# Docker Composeでサービスを停止し、コンテナとネットワークを削除
 down:
-	@echo "Docker Composeでサービスを停止中..."
+	@echo "Docker Composeでサービスを停止し、コンテナとネットワークを削除中..."
 	$(DOCKER_COMPOSE_CMD) down
 
-# Docker Composeでサービスを停止（stopコマンド）
+# Docker Composeでサービスを停止（コンテナは削除されない）
 stop:
-	@echo "Docker Composeでサービスを停止中..."
+	@echo "Docker Composeでサービスを停止中（コンテナは削除されません）..."
 	$(DOCKER_COMPOSE_CMD) stop
 
 # Docker Composeのログを表示
