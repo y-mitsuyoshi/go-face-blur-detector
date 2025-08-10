@@ -333,13 +333,12 @@ func calculateLaplacianVariance(gray [][]float64) float64 {
 	count := 0
 
 	for y := 1; y < height-1; y++ {
+		laplacian[y-1] = make([]float64, width-2)
 		for x := 1; x < width-1; x++ {
 			value := gray[y][x]*(-4) + gray[y-1][x] + gray[y+1][x] + gray[y][x-1] + gray[y][x+1]
-			if y-1 < len(laplacian) && x-1 < len(laplacian[y-1]) {
-				laplacian[y-1][x-1] = value
-				sum += value
-				count++
-			}
+			laplacian[y-1][x-1] = value
+			sum += value
+			count++
 		}
 	}
 
