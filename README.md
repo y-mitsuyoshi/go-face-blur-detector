@@ -61,6 +61,18 @@ make run-local
 
 ## API エンドポイント
 
+### GET /
+
+APIのルートエンドポイント。サービス名とバージョンを返します。
+
+**レスポンス:**
+```json
+{
+  "message": "Face Blur Detector API",
+  "version": "v1.0.0"
+}
+```
+
 ### POST /detect
 
 画像をアップロードして顔のブレを検知します。
@@ -143,22 +155,30 @@ curl -X POST -F "image=@internal/facedetector/testdata/face_blurred.jpg" http://
 
 ### POST /detect/face/visualize
 
-アップロードされた画像から顔を検出し、その周りに四角い枠を描画して返します。
+アップロードされた画像から顔を検出し、加工して返します。`output`クエリパラメータで、`box`（顔の周りに四角を描画）または`crop`（顔の部分を切り出す）を指定できます。デフォルトは`box`です。
 
 **リクエスト:**
 - Content-Type: multipart/form-data
 - フィールド: `image` (画像ファイル)
+- クエリパラメータ (オプション): `output` (`box` or `crop`)
 
 **レスポンス:**
 - Content-Type: image/png
-- ボディ: 顔の周りに赤い四角が描画された画像データ
+- ボディ: 加工された画像データ
 
 **テスト:**
 
+**顔を四角で囲む (デフォルト):**
 ```bash
-curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" http://localhost:8080/detect/face/visualize -o visualized_face.png
+curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" "http://localhost:8080/detect/face/visualize?output=box" -o visualized_face_box.png
 ```
-`visualized_face.png`というファイル名で、顔が四角で囲われた画像が保存されます。
+`visualized_face_box.png`というファイル名で、顔が四角で囲われた画像が保存されます。
+
+**顔を切り出す:**
+```bash
+curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" "http://localhost:8080/detect/face/visualize?output=crop" -o visualized_face_crop.png
+```
+`visualized_face_crop.png`というファイル名で、顔の部分だけが切り出された画像が保存されます。
 
 ## 使用可能なコマンド
 
