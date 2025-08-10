@@ -35,7 +35,7 @@ func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 
 	// pigo分類器を初期化
 	cParams := CascadeParams{
-		MinSize:     20,
+		MinSize:     50,
 		MaxSize:     1000,
 		ShiftFactor: 0.1,
 		ScaleFactor: 1.1,
@@ -57,12 +57,12 @@ func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 	angle := 0.0 // 0.0は正面顔のみ
 	dets := classifier.RunCascade(cParams, angle)
 	// IoU（Intersection over Union）の閾値を調整してクラスタリング
-	dets = classifier.ClusterDetections(dets, 0.3)
+	dets = classifier.ClusterDetections(dets, 0.2)
 
 	// 信頼度が低い検出結果を除外
 	var validDets []Detection
 	for _, det := range dets {
-		if det.Q > 5.0 {
+		if det.Q > 6.0 {
 			validDets = append(validDets, det)
 		}
 	}
@@ -70,7 +70,7 @@ func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 	return img, validDets, nil
 }
 
-// DrawFaceRects は画像内の検出された全ての顔の周りに四角い枠を描画します。
+// DrawFaceRects は画像内の検出された最大の顔の周りに太い四角い枠を描画します。
 func DrawFaceRects(imageData []byte) ([]byte, error) {
 	img, dets, err := detectFaces(imageData)
 	if err != nil {
@@ -81,41 +81,36 @@ func DrawFaceRects(imageData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("顔が検出されませんでした")
 	}
 
+	// 最も大きい顔を見つける
+	var largestDet Detection
+	maxScale := 0
+	for _, det := range dets {
+		if det.Scale > maxScale {
+			maxScale = det.Scale
+			largestDet = det
+		}
+	}
+
+	if maxScale == 0 {
+		return nil, fmt.Errorf("適切なサイズの顔が検出されませんでした")
+	}
+
 	// 描画用の新しいRGBA画像を作成
 	b := img.Bounds()
 	rgba := image.NewRGBA(b)
 	draw.Draw(rgba, b, img, image.Point{0, 0}, draw.Src)
 
-	// 各顔の周りに赤い四角を描画
-	for _, det := range dets {
-		if det.Scale > 50 {
-			rect := image.Rect(
-				det.Col-det.Scale/2,
-				det.Row-det.Scale/2,
-				det.Col+det.Scale/2,
-				det.Row+det.Scale/2,
-			)
-			// 四角を描画（ここでは単純な線画）
-			// 実際にはより良い描画ライブラリを使うことが望ましい
-			red := color.RGBA{255, 0, 0, 255}
-			// 上辺
-			for x := rect.Min.X; x < rect.Max.X; x++ {
-				rgba.Set(x, rect.Min.Y, red)
-			}
-			// 下辺
-			for x := rect.Min.X; x < rect.Max.X; x++ {
-				rgba.Set(x, rect.Max.Y-1, red)
-			}
-			// 左辺
-			for y := rect.Min.Y; y < rect.Max.Y; y++ {
-				rgba.Set(rect.Min.X, y, red)
-			}
-			// 右辺
-			for y := rect.Min.Y; y < rect.Max.Y; y++ {
-				rgba.Set(rect.Max.X-1, y, red)
-			}
-		}
-	}
+	// 最も大きい顔の周りに赤い四角を描画
+	rect := image.Rect(
+		largestDet.Col-largestDet.Scale/2,
+		largestDet.Row-largestDet.Scale/2,
+		largestDet.Col+largestDet.Scale/2,
+		largestDet.Row+largestDet.Scale/2,
+	)
+
+	red := color.RGBA{255, 0, 0, 255}
+	thickness := 3
+	drawThickRect(rgba, rect, red, thickness)
 
 	// 画像をPNGとしてエンコード
 	buf := new(bytes.Buffer)
@@ -124,6 +119,47 @@ func DrawFaceRects(imageData []byte) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// drawThickRect は指定された太さで矩形を描画します。
+func drawThickRect(img *image.RGBA, rect image.Rectangle, c color.Color, thickness int) {
+	// 線の太さを考慮して、描画範囲が画像の範囲を超えないようにクリッピング
+	bounds := img.Bounds()
+	drawRect := rect.Intersect(bounds)
+
+	for i := 0; i < thickness; i++ {
+		// 上辺
+		y0 := drawRect.Min.Y + i
+		if y0 < bounds.Max.Y {
+			for x := drawRect.Min.X; x < drawRect.Max.X; x++ {
+				img.Set(x, y0, c)
+			}
+		}
+
+		// 下辺
+		y1 := drawRect.Max.Y - 1 - i
+		if y1 >= bounds.Min.Y {
+			for x := drawRect.Min.X; x < drawRect.Max.X; x++ {
+				img.Set(x, y1, c)
+			}
+		}
+
+		// 左辺
+		x0 := drawRect.Min.X + i
+		if x0 < bounds.Max.X {
+			for y := drawRect.Min.Y; y < drawRect.Max.Y; y++ {
+				img.Set(x0, y, c)
+			}
+		}
+
+		// 右辺
+		x1 := drawRect.Max.X - 1 - i
+		if x1 >= bounds.Min.X {
+			for y := drawRect.Min.Y; y < drawRect.Max.Y; y++ {
+				img.Set(x1, y, c)
+			}
+		}
+	}
 }
 
 // CropFace は画像から最も大きく検出された顔を切り抜きます。
