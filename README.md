@@ -1,10 +1,10 @@
-# Go Face Blur Detector
+# Go Image Sharpness Detector
 
-OpenCVを使用して顔のブレを検知するAPIサービス
+OpenCVを使用して画像の鮮明度（ブレ）を判定するAPIサービス
 
 ## 概要
 
-このプロジェクトは、アップロードされた画像から顔を検出し、その鮮明度スコアを返すREST APIです。OpenCVのラプラシアンフィルタと分散計算を使用してブレを検知します。
+このプロジェクトは、アップロードされた画像の鮮明度を評価するREST APIです。画像全体の鮮明度を計算するだけでなく、画像内に顔が検出された場合は、その顔領域に特化して鮮明度を計算することも可能です。ブレの検知には、OpenCVのラプラシアン法（分散）を利用しています。
 
 ## 機能
 
@@ -62,123 +62,110 @@ make run-local
 ## API エンドポイント
 
 ### GET /
-
 APIのルートエンドポイント。サービス名とバージョンを返します。
-
-**レスポンス:**
-```json
-{
-  "message": "Face Blur Detector API",
-  "version": "v1.0.0"
-}
-```
-
-### POST /detect
-
-画像をアップロードして顔のブレを検知します。
-
-**リクエスト:**
-- Content-Type: multipart/form-data
-- フィールド: `image` (画像ファイル)
-
-**レスポンス:**
-```json
-{
-  "sharpness_score": 85.6
-}
-```
+- **レスポンス (200 OK):**
+  ```json
+  {
+    "message": "Face Blur Detector API",
+    "version": "v1.0.0"
+  }
+  ```
 
 ### GET /health
+サービスの稼働状況を確認するためのヘルスチェックエンドポイント。
+- **レスポンス (200 OK):**
+  ```json
+  {
+    "status": "ok",
+    "service": "go-face-blur-detector"
+  }
+  ```
 
-ヘルスチェック用エンドポイント
+### POST /detect
+画像全体を対象に、鮮明度スコアを計算します。
+- **リクエスト:**
+  - `Content-Type: multipart/form-data`
+  - `image`: 画像ファイル
+- **レスポンス (200 OK):**
+  ```json
+  {
+    "sharpness_score": 150.75
+  }
+  ```
+- **エラーレスポンス (例: 400 Bad Request):**
+  ```json
+  {
+    "error": "画像ファイルの取得に失敗しました:..."
+  }
+  ```
 
-### APIのテスト
-
-`curl`コマンドを使用して、APIエンドポイントをテストできます。プロジェクトのルートディレクトリにいることを確認してください。
-`test.png`と`test_blurred.png`は`internal/facedetector/testdata/`にあります。
-
-**鮮明な画像のテスト:**
-
-```bash
-curl -X POST -F "image=@internal/facedetector/testdata/test.png" http://localhost:8080/detect
-```
-
-**ぼやけた画像のテスト:**
-
-```bash
-curl -X POST -F "image=@internal/facedetector/testdata/test_blurred.png" http://localhost:8080/detect
-```
-
-**期待されるレスポンス:**
-
-鮮明な画像は、ぼやけた画像よりも高い`sharpness_score`を返すはずです。
-
-```json
-// 鮮明な画像の例
-{
-  "sharpness_score": 234.56
-}
-
-// ぼやけた画像の例
-{
-  "sharpness_score": 78.90
-}
-```
-
-**顔画像の鮮明度テスト:**
-
-```bash
-curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" http://localhost:8080/detect/face
-```
-
-**ぼやけた顔画像のテスト:**
-
-```bash
-curl -X POST -F "image=@internal/facedetector/testdata/face_blurred.jpg" http://localhost:8080/detect/face
-```
-
-**期待されるレスポンス:**
-
-鮮明な顔画像は、ぼやけた顔画像よりも高い`sharpness_score`を返すはずです。
-
-```json
-// 鮮明な顔画像の例
-{
-  "sharpness_score": 123.45
-}
-
-// ぼやけた顔画像の例
-{
-  "sharpness_score": 45.67
-}
-```
+### POST /detect/face
+画像から顔を検出し、その**顔領域だけ**を対象に鮮明度スコアを計算します。複数の顔が検出された場合は、最も鮮明な顔のスコアを返します。
+- **リクエスト:**
+  - `Content-Type: multipart/form-data`
+  - `image`: 画像ファイル
+- **レスポンス (200 OK):**
+  ```json
+  {
+    "sharpness_score": 123.45
+  }
+  ```
+- **エラーレスポンス (例: 500 Internal Server Error):**
+  ```json
+  {
+    "error": "鮮明度の計算に失敗しました: 顔が検出されませんでした"
+  }
+  ```
 
 ### POST /detect/face/visualize
+アップロードされた画像から最も大きな顔を検出し、加工した画像を返します。
+- **リクエスト:**
+  - `Content-Type: multipart/form-data`
+  - `image`: 画像ファイル
+  - `output` (クエリパラメータ, オプション):
+    - `box` (デフォルト): 顔の周りに四角い枠を描画します。
+    - `crop`: 顔の部分を切り抜きます。
+- **レスポンス (200 OK):**
+  - `Content-Type: image/png`
+  - ボディ: 加工された画像データ
+- **エラーレスポンス (例: 500 Internal Server Error):**
+  ```json
+  {
+    "error": "顔検出または画像処理に失敗しました: 顔が検出されませんでした"
+  }
+  ```
 
-アップロードされた画像から顔を検出し、加工して返します。`output`クエリパラメータで、`box`（顔の周りに四角を描画）または`crop`（顔の部分を切り出す）を指定できます。デフォルトは`box`です。
+## APIのテスト
 
-**リクエスト:**
-- Content-Type: multipart/form-data
-- フィールド: `image` (画像ファイル)
-- クエリパラメータ (オプション): `output` (`box` or `crop`)
+`curl`コマンドを使用してAPIをテストできます。プロジェクトのルートディレクトリから以下のコマンドを実行してください。テスト用の画像は`internal/facedetector/testdata/`にあります。
 
-**レスポンス:**
-- Content-Type: image/png
-- ボディ: 加工された画像データ
-
-**テスト:**
-
-**顔を四角で囲む (デフォルト):**
+### 画像全体の鮮明度をテスト
 ```bash
-curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" "http://localhost:8080/detect/face/visualize?output=box" -o visualized_face_box.png
+# 鮮明な画像
+curl -X POST -F "image=@internal/facedetector/testdata/test.png" http://localhost:8080/detect
+# ぼやけた画像
+curl -X POST -F "image=@internal/facedetector/testdata/test_blurred.png" http://localhost:8080/detect
 ```
-`visualized_face_box.png`というファイル名で、顔が四角で囲われた画像が保存されます。
+**期待される結果:** 鮮明な画像は、ぼやけた画像よりも高い`sharpness_score`を返します。
 
-**顔を切り出す:**
+### 顔の鮮明度をテスト
 ```bash
+# 鮮明な顔画像
+curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" http://localhost:8080/detect/face
+# ぼやけた顔画像
+curl -X POST -F "image=@internal/facedetector/testdata/face_blurred.jpg" http://localhost:8080/detect/face
+```
+**期待される結果:** 鮮明な顔画像は、ぼやけた顔画像よりも高い`sharpness_score`を返します。
+
+### 顔検出の可視化をテスト
+```bash
+# 顔を四角で囲む (デフォルト)
+curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" "http://localhost:8080/detect/face/visualize?output=box" -o visualized_face_box.png
+
+# 顔を切り抜く
 curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" "http://localhost:8080/detect/face/visualize?output=crop" -o visualized_face_crop.png
 ```
-`visualized_face_crop.png`というファイル名で、顔の部分だけが切り出された画像が保存されます。
+**期待される結果:** `visualized_face_box.png`と`visualized_face_crop.png`が生成されます。
 
 ## 使用可能なコマンド
 
