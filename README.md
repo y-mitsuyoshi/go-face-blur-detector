@@ -24,7 +24,7 @@ OpenCVを使用して顔のブレを検知するAPIサービス
 ### 前提条件
 
 - Docker
-- Docker Compose（または `docker compose`）
+- Docker Compose
 
 ### Docker環境の確認
 
