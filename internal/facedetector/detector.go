@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"image/jpeg"
 	"image/png"
 	"io/ioutil"
@@ -14,19 +16,18 @@ import (
 
 var cascadeFile = "cascade/facefinder"
 
-// CalculateFaceSharpness は、画像内の顔の鮮明度スコアを計算します。
-// 複数の顔が検出された場合は、最も高いスコアを返します。
-func CalculateFaceSharpness(imageData []byte) (float64, error) {
+// detectFaces は画像データから顔を検出し、検出結果と元画像を返します。
+func detectFaces(imageData []byte) (image.Image, []pigo.Detection, error) {
 	// カスケードファイル（分類器）を読み込む
 	cascade, err := ioutil.ReadFile(cascadeFile)
 	if err != nil {
-		return 0, fmt.Errorf("カスケードファイルの読み込みに失敗しました: %v", err)
+		return nil, nil, fmt.Errorf("カスケードファイルの読み込みに失敗しました: %v", err)
 	}
 
 	// バイトスライスから画像をデコード
 	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		return 0, fmt.Errorf("画像のデコードに失敗しました: %v", err)
+		return nil, nil, fmt.Errorf("画像のデコードに失敗しました: %v", err)
 	}
 
 	// pigoが要求する画像形式に変換
@@ -50,13 +51,126 @@ func CalculateFaceSharpness(imageData []byte) (float64, error) {
 
 	classifier, err := pigo.Unpack(cascade)
 	if err != nil {
-		return 0, fmt.Errorf("カスケードのアンパックに失敗しました: %v", err)
+		return nil, nil, fmt.Errorf("カスケードのアンパックに失敗しました: %v", err)
 	}
 
 	// 顔検出を実行
 	angle := 0.0 // 0.0は正面顔のみ
 	dets := classifier.RunCascade(cParams, angle)
 	dets = classifier.ClusterDetections(dets, 0.2)
+
+	return img, dets, nil
+}
+
+// DrawFaceRects は画像内の検出された全ての顔の周りに四角い枠を描画します。
+func DrawFaceRects(imageData []byte) ([]byte, error) {
+	img, dets, err := detectFaces(imageData)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(dets) == 0 {
+		return nil, fmt.Errorf("顔が検出されませんでした")
+	}
+
+	// 描画用の新しいRGBA画像を作成
+	b := img.Bounds()
+	rgba := image.NewRGBA(b)
+	draw.Draw(rgba, b, img, image.Point{0, 0}, draw.Src)
+
+	// 各顔の周りに赤い四角を描画
+	for _, det := range dets {
+		if det.Scale > 50 {
+			rect := image.Rect(
+				det.Col-det.Scale/2,
+				det.Row-det.Scale/2,
+				det.Col+det.Scale/2,
+				det.Row+det.Scale/2,
+			)
+			// 四角を描画（ここでは単純な線画）
+			// 実際にはより良い描画ライブラリを使うことが望ましい
+			red := color.RGBA{255, 0, 0, 255}
+			// 上辺
+			for x := rect.Min.X; x < rect.Max.X; x++ {
+				rgba.Set(x, rect.Min.Y, red)
+			}
+			// 下辺
+			for x := rect.Min.X; x < rect.Max.X; x++ {
+				rgba.Set(x, rect.Max.Y-1, red)
+			}
+			// 左辺
+			for y := rect.Min.Y; y < rect.Max.Y; y++ {
+				rgba.Set(rect.Min.X, y, red)
+			}
+			// 右辺
+			for y := rect.Min.Y; y < rect.Max.Y; y++ {
+				rgba.Set(rect.Max.X-1, y, red)
+			}
+		}
+	}
+
+	// 画像をPNGとしてエンコード
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, rgba); err != nil {
+		return nil, fmt.Errorf("画像のエンコードに失敗しました: %v", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// CropFace は画像から最も大きく検出された顔を切り抜きます。
+func CropFace(imageData []byte) ([]byte, error) {
+	img, dets, err := detectFaces(imageData)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(dets) == 0 {
+		return nil, fmt.Errorf("顔が検出されませんでした")
+	}
+
+	// 最も大きい顔を見つける
+	var largestDet pigo.Detection
+	maxScale := 0
+	for _, det := range dets {
+		if det.Scale > maxScale {
+			maxScale = det.Scale
+			largestDet = det
+		}
+	}
+
+	if maxScale == 0 {
+		return nil, fmt.Errorf("適切なサイズの顔が検出されませんでした")
+	}
+
+	// 顔領域を切り抜く
+	faceRect := image.Rect(
+		largestDet.Col-largestDet.Scale/2,
+		largestDet.Row-largestDet.Scale/2,
+		largestDet.Col+largestDet.Scale/2,
+		largestDet.Row+largestDet.Scale/2,
+	)
+
+	// 新しい画像に切り抜いた部分をコピー
+	croppedImg := image.NewRGBA(faceRect)
+	draw.Draw(croppedImg, faceRect, img, faceRect.Min, draw.Src)
+
+	// 画像をPNGとしてエンコード
+	buf := new(bytes.Buffer)
+	if err := png.Encode(buf, croppedImg); err != nil {
+		return nil, fmt.Errorf("画像のエンコードに失敗しました: %v", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// CalculateFaceSharpness は、画像内の顔の鮮明度スコアを計算します。
+// 複数の顔が検出された場合は、最も高いスコアを返します。
+func CalculateFaceSharpness(imageData []byte) (float64, error) {
+	img, dets, err := detectFaces(imageData)
+	if err != nil {
+		return 0, err
+	}
 
 	if len(dets) == 0 {
 		return 0, fmt.Errorf("顔が検出されませんでした")

@@ -101,6 +101,44 @@ func main() {
 		})
 	})
 
+	// 顔検出の可視化エンドポイント
+	r.POST("/detect/face/visualize", func(c *gin.Context) {
+		outputType := c.DefaultQuery("output", "box") // "box" or "crop"
+
+		file, _, err := c.Request.FormFile("image")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "画像ファイルの取得に失敗しました: " + err.Error()})
+			return
+		}
+		defer file.Close()
+
+		imgData, err := io.ReadAll(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "画像の読み込みに失敗しました: " + err.Error()})
+			return
+		}
+
+		var resultImage []byte
+		var procErr error
+
+		switch outputType {
+		case "box":
+			resultImage, procErr = facedetector.DrawFaceRects(imgData)
+		case "crop":
+			resultImage, procErr = facedetector.CropFace(imgData)
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "無効なoutputタイプが指定されました。'box' または 'crop' を使用してください。"})
+			return
+		}
+
+		if procErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "顔検出または画像処理に失敗しました: " + procErr.Error()})
+			return
+		}
+
+		c.Data(http.StatusOK, "image/png", resultImage)
+	})
+
 	log.Printf("サーバーをポート %s で起動中...", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatal("サーバーの起動に失敗しました:", err)
