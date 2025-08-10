@@ -11,13 +11,12 @@ import (
 	"io/ioutil"
 	"math"
 
-	pigo "github.com/esimov/pigo/core"
 )
 
 var cascadeFile = "cascade/facefinder"
 
 // detectFaces は画像データから顔を検出し、検出結果と元画像を返します。
-func detectFaces(imageData []byte) (image.Image, []pigo.Detection, error) {
+func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 	// カスケードファイル（分類器）を読み込む
 	cascade, err := ioutil.ReadFile(cascadeFile)
 	if err != nil {
@@ -31,23 +30,23 @@ func detectFaces(imageData []byte) (image.Image, []pigo.Detection, error) {
 	}
 
 	// pigoが要求する画像形式に変換
-	pixels := pigo.RgbToGrayscale(img)
+	pixels := RgbToGrayscale(img)
 	cols, rows := img.Bounds().Max.X, img.Bounds().Max.Y
 
 	// pigo分類器を初期化
-	cParams := pigo.CascadeParams{
+	cParams := CascadeParams{
 		MinSize:     20,
 		MaxSize:     1000,
 		ShiftFactor: 0.1,
 		ScaleFactor: 1.1,
-		ImageParams: pigo.ImageParams{
+		ImageParams: ImageParams{
 			Pixels: pixels,
 			Rows:   rows,
 			Cols:   cols,
 			Dim:    cols,
 		},
 	}
-	pigo := pigo.NewPigo()
+	pigo := NewPigo()
 
 	classifier, err := pigo.Unpack(cascade)
 	if err != nil {
@@ -57,9 +56,18 @@ func detectFaces(imageData []byte) (image.Image, []pigo.Detection, error) {
 	// 顔検出を実行
 	angle := 0.0 // 0.0は正面顔のみ
 	dets := classifier.RunCascade(cParams, angle)
-	dets = classifier.ClusterDetections(dets, 0.2)
+	// IoU（Intersection over Union）の閾値を調整してクラスタリング
+	dets = classifier.ClusterDetections(dets, 0.3)
 
-	return img, dets, nil
+	// 信頼度が低い検出結果を除外
+	var validDets []Detection
+	for _, det := range dets {
+		if det.Q > 5.0 {
+			validDets = append(validDets, det)
+		}
+	}
+
+	return img, validDets, nil
 }
 
 // DrawFaceRects は画像内の検出された全ての顔の周りに四角い枠を描画します。
@@ -130,7 +138,7 @@ func CropFace(imageData []byte) ([]byte, error) {
 	}
 
 	// 最も大きい顔を見つける
-	var largestDet pigo.Detection
+	var largestDet Detection
 	maxScale := 0
 	for _, det := range dets {
 		if det.Scale > maxScale {
