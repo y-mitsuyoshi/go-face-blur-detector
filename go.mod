@@ -3,8 +3,8 @@ module github.com/y-mitsuyoshi/go-face-blur-detector
 go 1.21
 
 require (
-	github.com/esimov/pigo v1.4.1
 	github.com/gin-gonic/gin v1.10.1
+	gocv.io/x/gocv v0.31.0
 )
 
 require (
