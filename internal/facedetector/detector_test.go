@@ -182,3 +182,72 @@ func TestCalculateFaceSharpness(t *testing.T) {
 		t.Logf("顔のない画像で期待どおりエラーを検出: %v", err)
 	}
 }
+
+func TestCropFace(t *testing.T) {
+	// 顔が検出される画像をテスト
+	faceImgData, err := os.ReadFile("testdata/face.jpg")
+	if err != nil {
+		t.Fatalf("顔画像の読み込みに失敗しました: %v", err)
+	}
+
+	croppedData, err := CropFace(faceImgData)
+	if err != nil {
+		t.Fatalf("CropFaceでエラーが発生しました: %v", err)
+	}
+
+	if len(croppedData) == 0 {
+		t.Errorf("出力された画像データが空です")
+	}
+
+	// 出力画像がデコード可能か確認
+	_, _, err = image.Decode(bytes.NewReader(croppedData))
+	if err != nil {
+		t.Errorf("出力画像のデコードに失敗しました: %v", err)
+	}
+
+	// 元の画像よりサイズが小さいことを確認
+	if len(croppedData) >= len(faceImgData) {
+		t.Errorf("切り抜かれた画像が元の画像より小さくありません")
+	}
+
+	// 顔が検出されない画像をテスト
+	noFaceImgData := createTestImage(100, 100, "solid") // 顔ではない画像
+	_, err = CropFace(noFaceImgData)
+	if err == nil {
+		t.Errorf("顔のない画像でエラーが返されませんでした")
+	} else {
+		t.Logf("顔のない画像で期待どおりエラーを検出: %v", err)
+	}
+}
+
+func TestDrawFaceRects(t *testing.T) {
+	// 顔が検出される画像をテスト
+	faceImgData, err := os.ReadFile("testdata/face.jpg")
+	if err != nil {
+		t.Fatalf("顔画像の読み込みに失敗しました: %v", err)
+	}
+
+	visualizedData, err := DrawFaceRects(faceImgData)
+	if err != nil {
+		t.Fatalf("DrawFaceRectsでエラーが発生しました: %v", err)
+	}
+
+	if len(visualizedData) == 0 {
+		t.Errorf("出力された画像データが空です")
+	}
+
+	// 出力画像がデコード可能か確認
+	_, _, err = image.Decode(bytes.NewReader(visualizedData))
+	if err != nil {
+		t.Errorf("出力画像のデコードに失敗しました: %v", err)
+	}
+
+	// 顔が検出されない画像をテスト
+	noFaceImgData := createTestImage(100, 100, "solid") // 顔ではない画像
+	_, err = DrawFaceRects(noFaceImgData)
+	if err == nil {
+		t.Errorf("顔のない画像でエラーが返されませんでした")
+	} else {
+		t.Logf("顔のない画像で期待どおりエラーを検出: %v", err)
+	}
+}
