@@ -141,6 +141,25 @@ curl -X POST -F "image=@internal/facedetector/testdata/face_blurred.jpg" http://
 }
 ```
 
+### POST /detect/face/visualize
+
+アップロードされた画像から顔を検出し、その周りに四角い枠を描画して返します。
+
+**リクエスト:**
+- Content-Type: multipart/form-data
+- フィールド: `image` (画像ファイル)
+
+**レスポンス:**
+- Content-Type: image/png
+- ボディ: 顔の周りに赤い四角が描画された画像データ
+
+**テスト:**
+
+```bash
+curl -X POST -F "image=@internal/facedetector/testdata/face.jpg" http://localhost:8080/detect/face/visualize -o visualized_face.png
+```
+`visualized_face.png`というファイル名で、顔が四角で囲われた画像が保存されます。
+
 ## 使用可能なコマンド
 
 ```bash
