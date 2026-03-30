@@ -22,34 +22,84 @@ type Detection struct {
 	Q     float32 // 信頼度スコア (GoCVでは直接提供されない)
 }
 
-var cascadeFile = "cascade/haarcascade_frontalface_alt2.xml"
+var cascadeFiles = []string{
+	"cascade/haarcascade_frontalface_alt2.xml",
+	"/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+	"/usr/share/opencv4/haarcascades/haarcascade_frontalface_alt.xml",
+	"/usr/share/opencv4/haarcascades/haarcascade_profileface.xml",
+}
+
+// tryDetectWithCascades は複数のカスケード分類器を順に試して顔検出を実行します。
+func tryDetectWithCascades(mat gocv.Mat, minNeighbors int) []image.Rectangle {
+	for _, cascadeFile := range cascadeFiles {
+		classifier := gocv.NewCascadeClassifier()
+		if !classifier.Load(cascadeFile) {
+			classifier.Close()
+			continue
+		}
+		rects := classifier.DetectMultiScaleWithParams(mat, 1.05, minNeighbors,
+			0, image.Point{X: 20, Y: 20}, image.Point{})
+		classifier.Close()
+		if len(rects) > 0 {
+			return rects
+		}
+	}
+	return nil
+}
 
 // detectFaces は画像データから顔を検出し、検出結果と元画像を返します。
 // pigoの代わりにGoCVを使用するように変更されました。
 func detectFaces(imageData []byte) (image.Image, []Detection, error) {
-	// バイトスライスから画像をデコード
+	// バイトスライスから画像をデコード（Go標準ライブラリ、結果返却用）
 	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
 		return nil, nil, fmt.Errorf("画像のデコードに失敗しました: %v", err)
 	}
 
-	// Goのimage.Imageをgocv.Matに変換
-	mat, err := gocv.ImageToMatRGB(img)
+	// OpenCVで直接デコード（色空間を正しく扱うため）
+	mat, err := gocv.IMDecode(imageData, gocv.IMReadColor)
 	if err != nil {
-		return nil, nil, fmt.Errorf("image.Imageからgocv.Matへの変換に失敗しました: %v", err)
+		return nil, nil, fmt.Errorf("OpenCVでの画像デコードに失敗しました: %v", err)
 	}
 	defer mat.Close()
 
-	// カスケード分類器をロード
-	classifier := gocv.NewCascadeClassifier()
-	defer classifier.Close()
+	// グレースケールに変換（Haar Cascadeはグレースケール画像で動作する）
+	grayMat := gocv.NewMat()
+	defer grayMat.Close()
+	gocv.CvtColor(mat, &grayMat, gocv.ColorBGRToGray)
 
-	if !classifier.Load(cascadeFile) {
-		return nil, nil, fmt.Errorf("カスケードファイルの読み込みに失敗しました: %s", cascadeFile)
+	// CLAHE（適応的ヒストグラム均等化）で逆光・低コントラストを改善
+	clahe := gocv.NewCLAHEWithParams(2.0, image.Point{X: 8, Y: 8})
+	defer clahe.Close()
+	equalizedMat := gocv.NewMat()
+	defer equalizedMat.Close()
+	clahe.Apply(grayMat, &equalizedMat)
+
+	// 複数のカスケード分類器を順に試して顔検出を実行
+	var rects []image.Rectangle
+	rects = tryDetectWithCascades(equalizedMat, 2)
+
+	// 顔が検出されなかった場合、画像を段階的に拡大して再試行
+	for _, scale := range []int{2, 4} {
+		if len(rects) > 0 {
+			break
+		}
+		upscaled := gocv.NewMat()
+		gocv.Resize(equalizedMat, &upscaled, image.Point{
+			X: equalizedMat.Cols() * scale,
+			Y: equalizedMat.Rows() * scale,
+		}, 0, 0, gocv.InterpolationLinear)
+		rects = tryDetectWithCascades(upscaled, 1)
+		upscaled.Close()
+		// 座標を元のスケールに戻す
+		for i := range rects {
+			rects[i].Min.X /= scale
+			rects[i].Min.Y /= scale
+			rects[i].Max.X /= scale
+			rects[i].Max.Y /= scale
+		}
 	}
 
-	// 顔検出を実行
-	rects := classifier.DetectMultiScale(mat)
 	if len(rects) == 0 {
 		// 顔が検出されなかった場合、空のスライスを返す
 		return img, []Detection{}, nil
@@ -62,7 +112,7 @@ func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 			Row:   r.Min.Y + r.Dy()/2,
 			Col:   r.Min.X + r.Dx()/2,
 			Scale: (r.Dx() + r.Dy()) / 2, // スケールを平均サイズとして近似
-			Q:     10.0,                   // GoCVは信頼度スコアを直接返さないため、ダミー値を設定
+			Q:     10.0,                  // GoCVは信頼度スコアを直接返さないため、ダミー値を設定
 		})
 	}
 
@@ -212,7 +262,6 @@ func CropFace(imageData []byte) ([]byte, error) {
 		croppedImg = cropped
 	}
 
-
 	// 画像をPNGとしてエンコード
 	buf := new(bytes.Buffer)
 	if err := png.Encode(buf, croppedImg); err != nil {
@@ -221,7 +270,6 @@ func CropFace(imageData []byte) ([]byte, error) {
 
 	return buf.Bytes(), nil
 }
-
 
 // CalculateFaceSharpness は、画像内の顔の鮮明度スコアを計算します。
 // 複数の顔が検出された場合は、最も高いスコアを返します。
