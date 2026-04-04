@@ -25,6 +25,9 @@ func main() {
 	// Ginルーターを作成
 	r := gin.Default()
 
+	// アップロードサイズ制限（10MB）
+	r.MaxMultipartMemory = 10 << 20
+
 	// ヘルスチェック用エンドポイント
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{

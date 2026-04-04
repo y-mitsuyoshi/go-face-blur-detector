@@ -6,7 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"image/jpeg"
+	_ "image/jpeg" // image.Decodeでjpeg形式をサポートするために必要
 	"image/png"
 	"math"
 	"os"
@@ -25,6 +25,11 @@ func dnnModelFilesExist() bool {
 	return true
 }
 
+// subImager はSubImageメソッドを持つ画像インタフェースです。
+type subImager interface {
+	SubImage(r image.Rectangle) image.Image
+}
+
 // Detection はpigoライブラリの検出結果を模倣した構造体です。
 // GoCVとの互換性のために残しますが、pigo特有のフィールドは使われません。
 type Detection struct {
@@ -32,6 +37,33 @@ type Detection struct {
 	Col   int
 	Scale int
 	Q     float32 // 信頼度スコア (GoCVでは直接提供されない)
+}
+
+// largestDetection は検出結果から最も大きい顔を返します。
+// 見つからない場合は ok=false を返します。
+func largestDetection(dets []Detection) (Detection, bool) {
+	var largest Detection
+	maxScale := 0
+	for _, det := range dets {
+		if det.Scale > maxScale {
+			maxScale = det.Scale
+			largest = det
+		}
+	}
+	if maxScale == 0 {
+		return Detection{}, false
+	}
+	return largest, true
+}
+
+// detectionRect はDetectionから矩形を生成します。
+func detectionRect(det Detection) image.Rectangle {
+	return image.Rect(
+		det.Col-det.Scale/2,
+		det.Row-det.Scale/2,
+		det.Col+det.Scale/2,
+		det.Row+det.Scale/2,
+	)
 }
 
 var cascadeFiles = []string{
@@ -417,22 +449,11 @@ func DrawFaceRects(imageData []byte) ([]byte, error) {
 	}
 
 	if len(dets) == 0 {
-		// 顔が検出されなかった場合でもエラーではなく、元の画像を返すか、特定のメッセージを返すか選択
-		// ここではエラーとして扱う
 		return nil, fmt.Errorf("顔が検出されませんでした")
 	}
 
-	// 最も大きい顔を見つける
-	var largestDet Detection
-	maxScale := 0
-	for _, det := range dets {
-		if det.Scale > maxScale {
-			maxScale = det.Scale
-			largestDet = det
-		}
-	}
-
-	if maxScale == 0 {
+	largestDet, ok := largestDetection(dets)
+	if !ok {
 		return nil, fmt.Errorf("適切なサイズの顔が検出されませんでした")
 	}
 
@@ -442,13 +463,7 @@ func DrawFaceRects(imageData []byte) ([]byte, error) {
 	draw.Draw(rgba, b, img, image.Point{0, 0}, draw.Src)
 
 	// 最も大きい顔の周りに赤い四角を描画
-	rect := image.Rect(
-		largestDet.Col-largestDet.Scale/2,
-		largestDet.Row-largestDet.Scale/2,
-		largestDet.Col+largestDet.Scale/2,
-		largestDet.Row+largestDet.Scale/2,
-	)
-	rect = clipRect(rect, b)
+	rect := clipRect(detectionRect(largestDet), b)
 
 	red := color.RGBA{255, 0, 0, 255}
 	thickness := 3
@@ -515,41 +530,19 @@ func CropFace(imageData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("顔が検出されませんでした")
 	}
 
-	// 最も大きい顔を見つける
-	var largestDet Detection
-	maxScale := 0
-	for _, det := range dets {
-		if det.Scale > maxScale {
-			maxScale = det.Scale
-			largestDet = det
-		}
-	}
-
-	if maxScale == 0 {
+	largestDet, ok := largestDetection(dets)
+	if !ok {
 		return nil, fmt.Errorf("適切なサイズの顔が検出されませんでした")
 	}
 
 	// 顔領域を切り抜く（15%のマージンを追加して額・顎を含める）
-	faceRect := image.Rect(
-		largestDet.Col-largestDet.Scale/2,
-		largestDet.Row-largestDet.Scale/2,
-		largestDet.Col+largestDet.Scale/2,
-		largestDet.Row+largestDet.Scale/2,
-	)
-	faceRect = addMargin(faceRect, 0.15)
+	faceRect := addMargin(detectionRect(largestDet), 0.15)
 	faceRect = clipRect(faceRect, img.Bounds())
 
-	// 新しい画像に切り抜いた部分をコピー
-	// `image.Image`インタフェースはSubImageをサポートしている
-	type SubImager interface {
-		SubImage(r image.Rectangle) image.Image
-	}
-
 	var croppedImg image.Image
-	if sub, ok := img.(SubImager); ok {
+	if sub, ok := img.(subImager); ok {
 		croppedImg = sub.SubImage(faceRect)
 	} else {
-		// SubImageをサポートしていない場合は手動でコピー
 		cropped := image.NewRGBA(faceRect.Bounds())
 		draw.Draw(cropped, faceRect.Bounds(), img, faceRect.Min, draw.Src)
 		croppedImg = cropped
@@ -579,23 +572,12 @@ func CalculateFaceSharpness(imageData []byte) (float64, error) {
 	maxSharpness := 0.0
 	// 検出された各顔に対して鮮明度を計算
 	for _, det := range dets {
-		// 顔領域を切り抜く
-		faceRect := image.Rect(
-			det.Col-det.Scale/2,
-			det.Row-det.Scale/2,
-			det.Col+det.Scale/2,
-			det.Row+det.Scale/2,
-		)
+		faceRect := clipRect(detectionRect(det), img.Bounds())
 
-		// Goのimage.Imageから顔部分をサブイメージとして切り出す
-		type SubImager interface {
-			SubImage(r image.Rectangle) image.Image
-		}
 		var faceImg image.Image
-		if sub, ok := img.(SubImager); ok {
+		if sub, ok := img.(subImager); ok {
 			faceImg = sub.SubImage(faceRect)
 		} else {
-			// fallback
 			cropped := image.NewRGBA(faceRect.Bounds())
 			draw.Draw(cropped, faceRect.Bounds(), img, faceRect.Min, draw.Src)
 			faceImg = cropped
@@ -621,18 +603,9 @@ func CalculateSharpness(imageData []byte) (float64, error) {
 		return 0, fmt.Errorf("画像データが空です")
 	}
 
-	reader := bytes.NewReader(imageData)
-	img, _, err := image.Decode(reader)
+	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		reader.Seek(0, 0)
-		img, err = jpeg.Decode(reader)
-		if err != nil {
-			reader.Seek(0, 0)
-			img, err = png.Decode(reader)
-			if err != nil {
-				return 0, fmt.Errorf("画像のデコードに失敗しました: %v", err)
-			}
-		}
+		return 0, fmt.Errorf("画像のデコードに失敗しました: %v", err)
 	}
 
 	grayImg := convertToGrayscale(img)
