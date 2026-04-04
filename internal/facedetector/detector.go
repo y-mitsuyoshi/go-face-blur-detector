@@ -170,6 +170,37 @@ func crossValidateWithDNN(mat gocv.Mat, cascadeRects []image.Rectangle) []image.
 	return validated
 }
 
+// clipRect は矩形を画像境界内にクリッピングします。
+func clipRect(rect image.Rectangle, bounds image.Rectangle) image.Rectangle {
+	if rect.Min.X < bounds.Min.X {
+		rect.Min.X = bounds.Min.X
+	}
+	if rect.Min.Y < bounds.Min.Y {
+		rect.Min.Y = bounds.Min.Y
+	}
+	if rect.Max.X > bounds.Max.X {
+		rect.Max.X = bounds.Max.X
+	}
+	if rect.Max.Y > bounds.Max.Y {
+		rect.Max.Y = bounds.Max.Y
+	}
+	return rect
+}
+
+// addMargin は矩形に指定割合のマージンを追加します。
+func addMargin(rect image.Rectangle, ratio float64) image.Rectangle {
+	w := rect.Dx()
+	h := rect.Dy()
+	mx := int(float64(w) * ratio)
+	my := int(float64(h) * ratio)
+	return image.Rect(
+		rect.Min.X-mx,
+		rect.Min.Y-my,
+		rect.Max.X+mx,
+		rect.Max.Y+my,
+	)
+}
+
 // rectsOverlap は2つの矩形がIoU（Intersection over Union）で一定以上重なっているか判定します。
 func rectsOverlap(a, b image.Rectangle) bool {
 	intersection := a.Intersect(b)
@@ -287,11 +318,16 @@ func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 
 	// --- DNNによる検出を試行（CLAHE前処理済み画像で） ---
 	var rects []image.Rectangle
+	dnnDetected := false
 	rects = tryDetectWithDNN(enhancedMat)
 
 	// CLAHE前処理で見つからなければ元画像でも試行
 	if len(rects) == 0 {
 		rects = tryDetectWithDNN(mat)
+	}
+
+	if len(rects) > 0 {
+		dnnDetected = true
 	}
 
 	// DNNで見つからなかった場合、従来のHaar Cascadeで試行
@@ -338,13 +374,18 @@ func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 		}
 	}
 
-	// Haar Cascade経路の結果に対して偽陽性フィルタリングを適用
+	// 偽陽性フィルタリングを適用（DNN・Haar Cascade両経路）
 	if len(rects) > 0 {
 		// 肌色・アスペクト比フィルタ
 		filtered := filterFalsePositives(mat, rects)
 		if len(filtered) > 0 {
-			// DNN交差検証
-			rects = crossValidateWithDNN(mat, filtered)
+			if dnnDetected {
+				// DNN経路の場合はフィルタ結果をそのまま使用
+				rects = filtered
+			} else {
+				// Haar Cascade経路の場合はDNN交差検証も追加
+				rects = crossValidateWithDNN(mat, filtered)
+			}
 		}
 		// フィルタで全て除外された場合は元の検出結果を維持（過剰除外を防止）
 	}
@@ -407,6 +448,7 @@ func DrawFaceRects(imageData []byte) ([]byte, error) {
 		largestDet.Col+largestDet.Scale/2,
 		largestDet.Row+largestDet.Scale/2,
 	)
+	rect = clipRect(rect, b)
 
 	red := color.RGBA{255, 0, 0, 255}
 	thickness := 3
@@ -487,13 +529,15 @@ func CropFace(imageData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("適切なサイズの顔が検出されませんでした")
 	}
 
-	// 顔領域を切り抜く
+	// 顔領域を切り抜く（15%のマージンを追加して額・顎を含める）
 	faceRect := image.Rect(
 		largestDet.Col-largestDet.Scale/2,
 		largestDet.Row-largestDet.Scale/2,
 		largestDet.Col+largestDet.Scale/2,
 		largestDet.Row+largestDet.Scale/2,
 	)
+	faceRect = addMargin(faceRect, 0.15)
+	faceRect = clipRect(faceRect, img.Bounds())
 
 	// 新しい画像に切り抜いた部分をコピー
 	// `image.Image`インタフェースはSubImageをサポートしている
