@@ -9,9 +9,21 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math"
+	"os"
 
 	"gocv.io/x/gocv"
 )
+
+// dnnModelFilesExist はDNNモデルファイルが両方存在するか確認します。
+func dnnModelFilesExist() bool {
+	if _, err := os.Stat(dnnProtoFile); err != nil {
+		return false
+	}
+	if _, err := os.Stat(dnnModelFile); err != nil {
+		return false
+	}
+	return true
+}
 
 // Detection はpigoライブラリの検出結果を模倣した構造体です。
 // GoCVとの互換性のために残しますが、pigo特有のフィールドは使われません。
@@ -27,6 +39,195 @@ var cascadeFiles = []string{
 	"/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
 	"/usr/share/opencv4/haarcascades/haarcascade_frontalface_alt.xml",
 	"/usr/share/opencv4/haarcascades/haarcascade_profileface.xml",
+}
+
+const (
+	dnnModelFile  = "models/res10_300x300_ssd_iter_140000.caffemodel"
+	dnnProtoFile  = "models/deploy.prototxt"
+	minConfidence = 0.5
+)
+
+// isSkinColor は検出領域がHSV色空間で肌色範囲に入っているか検証します。
+// 肌色ピクセルが一定割合以上ならtrueを返します。
+func isSkinColor(mat gocv.Mat, rect image.Rectangle) bool {
+	bounds := image.Rect(0, 0, mat.Cols(), mat.Rows())
+	rect = rect.Intersect(bounds)
+	if rect.Empty() {
+		return false
+	}
+
+	roi := mat.Region(rect)
+	defer roi.Close()
+
+	hsvMat := gocv.NewMat()
+	defer hsvMat.Close()
+	gocv.CvtColor(roi, &hsvMat, gocv.ColorBGRToHSV)
+
+	// 肌色のHSV範囲 (広めに設定して多様な肌色をカバー)
+	lowerBound := gocv.NewMatFromScalar(gocv.NewScalar(0, 20, 70, 0), gocv.MatTypeCV8UC3)
+	defer lowerBound.Close()
+	upperBound := gocv.NewMatFromScalar(gocv.NewScalar(35, 255, 255, 0), gocv.MatTypeCV8UC3)
+	defer upperBound.Close()
+
+	mask := gocv.NewMat()
+	defer mask.Close()
+	gocv.InRange(hsvMat, lowerBound, upperBound, &mask)
+
+	totalPixels := mask.Rows() * mask.Cols()
+	if totalPixels == 0 {
+		return false
+	}
+	skinPixels := gocv.CountNonZero(mask)
+	ratio := float64(skinPixels) / float64(totalPixels)
+
+	// 肌色ピクセルが15%以上であれば顔と判定
+	return ratio >= 0.15
+}
+
+// hasValidAspectRatio は検出矩形のアスペクト比が顔として妥当かチェックします。
+func hasValidAspectRatio(rect image.Rectangle) bool {
+	w := float64(rect.Dx())
+	h := float64(rect.Dy())
+	if w == 0 || h == 0 {
+		return false
+	}
+	ratio := w / h
+	// 顔のアスペクト比は概ね0.6〜1.6の範囲
+	return ratio >= 0.6 && ratio <= 1.6
+}
+
+// filterFalsePositives は検出結果から偽陽性を除外します。
+func filterFalsePositives(mat gocv.Mat, rects []image.Rectangle) []image.Rectangle {
+	var filtered []image.Rectangle
+	for _, r := range rects {
+		if !hasValidAspectRatio(r) {
+			continue
+		}
+		if !isSkinColor(mat, r) {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+// crossValidateWithDNN はHaar Cascadeの検出結果をDNNで再確認します。
+// DNNモデルが利用できない場合は元の結果をそのまま返します。
+func crossValidateWithDNN(mat gocv.Mat, cascadeRects []image.Rectangle) []image.Rectangle {
+	if !dnnModelFilesExist() {
+		return cascadeRects
+	}
+	net := gocv.ReadNetFromCaffe(dnnProtoFile, dnnModelFile)
+	if net.Empty() {
+		// DNNモデルが利用できない場合はフィルタリングのみで返す
+		return cascadeRects
+	}
+	defer net.Close()
+
+	blob := gocv.BlobFromImage(mat, 1.0, image.Point{X: 300, Y: 300}, gocv.NewScalar(104, 177, 123, 0), false, false)
+	defer blob.Close()
+
+	net.SetInput(blob, "")
+	prob := net.Forward("")
+	defer prob.Close()
+
+	detections := gocv.GetBlobChannel(prob, 0, 0)
+	defer detections.Close()
+
+	var dnnRects []image.Rectangle
+	for i := 0; i < detections.Rows(); i++ {
+		confidence := detections.GetFloatAt(i, 2)
+		// 交差検証では低めの閾値を使用（0.3）
+		if confidence > 0.3 {
+			left := float64(detections.GetFloatAt(i, 3)) * float64(mat.Cols())
+			top := float64(detections.GetFloatAt(i, 4)) * float64(mat.Rows())
+			right := float64(detections.GetFloatAt(i, 5)) * float64(mat.Cols())
+			bottom := float64(detections.GetFloatAt(i, 6)) * float64(mat.Rows())
+			dnnRects = append(dnnRects, image.Rect(int(left), int(top), int(right), int(bottom)))
+		}
+	}
+
+	if len(dnnRects) == 0 {
+		// DNNが何も検出しなかった場合、Cascade結果をそのまま返す（DNNが苦手なケース）
+		return cascadeRects
+	}
+
+	// Cascade検出結果のうち、DNNの検出結果と重なるものだけを残す
+	var validated []image.Rectangle
+	for _, cr := range cascadeRects {
+		for _, dr := range dnnRects {
+			if rectsOverlap(cr, dr) {
+				validated = append(validated, cr)
+				break
+			}
+		}
+	}
+
+	if len(validated) == 0 {
+		// 交差検証で全て除外された場合、Cascade結果を返す
+		return cascadeRects
+	}
+	return validated
+}
+
+// rectsOverlap は2つの矩形がIoU（Intersection over Union）で一定以上重なっているか判定します。
+func rectsOverlap(a, b image.Rectangle) bool {
+	intersection := a.Intersect(b)
+	if intersection.Empty() {
+		return false
+	}
+	interArea := float64(intersection.Dx() * intersection.Dy())
+	aArea := float64(a.Dx() * a.Dy())
+	bArea := float64(b.Dx() * b.Dy())
+	unionArea := aArea + bArea - interArea
+	if unionArea == 0 {
+		return false
+	}
+	iou := interArea / unionArea
+	return iou >= 0.2
+}
+
+// tryDetectWithDNN はOpenCVのDNNモジュールを使用して顔検出を実行します。
+func tryDetectWithDNN(mat gocv.Mat) []image.Rectangle {
+	// モデルファイルが存在するか確認
+	if !dnnModelFilesExist() {
+		return nil
+	}
+	net := gocv.ReadNetFromCaffe(dnnProtoFile, dnnModelFile)
+	if net.Empty() {
+		return nil
+	}
+	defer net.Close()
+
+	// 画像をブロブに変換 (300x300, mean subtraction, RGB swap false)
+	blob := gocv.BlobFromImage(mat, 1.0, image.Point{X: 300, Y: 300}, gocv.NewScalar(104, 177, 123, 0), false, false)
+	defer blob.Close()
+
+	net.SetInput(blob, "")
+	prob := net.Forward("")
+	defer prob.Close()
+
+	// 推論結果の解析
+	// 結果の形状は [1, 1, N, 7]
+	// 7つの要素: [batchId, classId, confidence, left, top, right, bottom]
+	rects := []image.Rectangle{}
+	detections := gocv.GetBlobChannel(prob, 0, 0)
+	defer detections.Close()
+
+	for i := 0; i < detections.Rows(); i++ {
+		confidence := detections.GetFloatAt(i, 2)
+		if confidence > minConfidence {
+			left := float64(detections.GetFloatAt(i, 3)) * float64(mat.Cols())
+			top := float64(detections.GetFloatAt(i, 4)) * float64(mat.Rows())
+			right := float64(detections.GetFloatAt(i, 5)) * float64(mat.Cols())
+			bottom := float64(detections.GetFloatAt(i, 6)) * float64(mat.Rows())
+
+			rect := image.Rect(int(left), int(top), int(right), int(bottom))
+			rects = append(rects, rect)
+		}
+	}
+
+	return rects
 }
 
 // tryDetectWithCascades は複数のカスケード分類器を順に試して顔検出を実行します。
@@ -48,7 +249,7 @@ func tryDetectWithCascades(mat gocv.Mat, minNeighbors int) []image.Rectangle {
 }
 
 // detectFaces は画像データから顔を検出し、検出結果と元画像を返します。
-// pigoの代わりにGoCVを使用するように変更されました。
+// DNN（SSD）を優先し、利用できない場合はHaar Cascadeを使用します。
 func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 	// バイトスライスから画像をデコード（Go標準ライブラリ、結果返却用）
 	img, _, err := image.Decode(bytes.NewReader(imageData))
@@ -63,41 +264,89 @@ func detectFaces(imageData []byte) (image.Image, []Detection, error) {
 	}
 	defer mat.Close()
 
-	// グレースケールに変換（Haar Cascadeはグレースケール画像で動作する）
-	grayMat := gocv.NewMat()
-	defer grayMat.Close()
-	gocv.CvtColor(mat, &grayMat, gocv.ColorBGRToGray)
+	// --- DNN用にCLAHE前処理を適用 ---
+	enhancedMat := gocv.NewMat()
+	defer enhancedMat.Close()
+	{
+		labMat := gocv.NewMat()
+		defer labMat.Close()
+		gocv.CvtColor(mat, &labMat, gocv.ColorBGRToLab)
 
-	// CLAHE（適応的ヒストグラム均等化）で逆光・低コントラストを改善
-	clahe := gocv.NewCLAHEWithParams(2.0, image.Point{X: 8, Y: 8})
-	defer clahe.Close()
-	equalizedMat := gocv.NewMat()
-	defer equalizedMat.Close()
-	clahe.Apply(grayMat, &equalizedMat)
+		// LABのLチャネルにCLAHEを適用
+		channels := gocv.Split(labMat)
+		dnnClahe := gocv.NewCLAHEWithParams(2.0, image.Point{X: 8, Y: 8})
+		defer dnnClahe.Close()
+		dnnClahe.Apply(channels[0], &channels[0])
 
-	// 複数のカスケード分類器を順に試して顔検出を実行
+		gocv.Merge(channels, &enhancedMat)
+		for _, ch := range channels {
+			ch.Close()
+		}
+		gocv.CvtColor(enhancedMat, &enhancedMat, gocv.ColorLabToBGR)
+	}
+
+	// --- DNNによる検出を試行（CLAHE前処理済み画像で） ---
 	var rects []image.Rectangle
-	rects = tryDetectWithCascades(equalizedMat, 2)
+	rects = tryDetectWithDNN(enhancedMat)
 
-	// 顔が検出されなかった場合、画像を段階的に拡大して再試行
-	for _, scale := range []int{2, 4} {
-		if len(rects) > 0 {
-			break
+	// CLAHE前処理で見つからなければ元画像でも試行
+	if len(rects) == 0 {
+		rects = tryDetectWithDNN(mat)
+	}
+
+	// DNNで見つからなかった場合、従来のHaar Cascadeで試行
+	if len(rects) == 0 {
+		// グレースケールに変換（Haar Cascade用）
+		grayMat := gocv.NewMat()
+		defer grayMat.Close()
+		gocv.CvtColor(mat, &grayMat, gocv.ColorBGRToGray)
+
+		// CLAHE（適応的ヒストグラム均等化）で逆光・低コントラストを改善
+		clahe := gocv.NewCLAHEWithParams(2.0, image.Point{X: 8, Y: 8})
+		defer clahe.Close()
+		equalizedMat := gocv.NewMat()
+		defer equalizedMat.Close()
+		clahe.Apply(grayMat, &equalizedMat)
+
+		// ガウシアンブラーを適用して背景の照明などのノイズ（エッジ）を滑らかにする
+		blurredMat := gocv.NewMat()
+		defer blurredMat.Close()
+		gocv.GaussianBlur(equalizedMat, &blurredMat, image.Point{X: 5, Y: 5}, 0, 0, gocv.BorderDefault)
+
+		// 複数のカスケード分類器を順に試して顔検出を実行
+		rects = tryDetectWithCascades(blurredMat, 4)
+
+		// 顔が検出されなかった場合、画像を段階的に拡大して再試行
+		for _, scale := range []int{2, 4} {
+			if len(rects) > 0 {
+				break
+			}
+			upscaled := gocv.NewMat()
+			gocv.Resize(blurredMat, &upscaled, image.Point{
+				X: blurredMat.Cols() * scale,
+				Y: blurredMat.Rows() * scale,
+			}, 0, 0, gocv.InterpolationLinear)
+			rects = tryDetectWithCascades(upscaled, 3)
+			upscaled.Close()
+			// 座標を元のスケールに戻す
+			for i := range rects {
+				rects[i].Min.X /= scale
+				rects[i].Min.Y /= scale
+				rects[i].Max.X /= scale
+				rects[i].Max.Y /= scale
+			}
 		}
-		upscaled := gocv.NewMat()
-		gocv.Resize(equalizedMat, &upscaled, image.Point{
-			X: equalizedMat.Cols() * scale,
-			Y: equalizedMat.Rows() * scale,
-		}, 0, 0, gocv.InterpolationLinear)
-		rects = tryDetectWithCascades(upscaled, 1)
-		upscaled.Close()
-		// 座標を元のスケールに戻す
-		for i := range rects {
-			rects[i].Min.X /= scale
-			rects[i].Min.Y /= scale
-			rects[i].Max.X /= scale
-			rects[i].Max.Y /= scale
+	}
+
+	// Haar Cascade経路の結果に対して偽陽性フィルタリングを適用
+	if len(rects) > 0 {
+		// 肌色・アスペクト比フィルタ
+		filtered := filterFalsePositives(mat, rects)
+		if len(filtered) > 0 {
+			// DNN交差検証
+			rects = crossValidateWithDNN(mat, filtered)
 		}
+		// フィルタで全て除外された場合は元の検出結果を維持（過剰除外を防止）
 	}
 
 	if len(rects) == 0 {
