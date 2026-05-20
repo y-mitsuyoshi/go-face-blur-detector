@@ -205,6 +205,48 @@ type detectionWithConfidence struct {
 	source     string // "dnn" or "cascade"
 }
 
+// SharpnessResult は鮮明度の分析結果を構造化して返します。
+// 正規化されたスコアに加え、診断やデバッグに有用な生の計測値とメタ情報を含みます。
+type SharpnessResult struct {
+	// NormalizedScore は正規化された鮮明度スコア（0〜100点）。
+	// 撮影環境・カメラ・被写体に依存しない客観的指標です。
+	// 80以上: 鮮明、50〜80: 許容範囲、50未満: ブレ・ボケあり
+	NormalizedScore float64 `json:"normalized_score"`
+
+	// RawLaplacianVariance はラプラシアン分散の生値。
+	// 画像サイズや被写体に依存しますが、参考指標として提供します。
+	RawLaplacianVariance float64 `json:"raw_laplacian_variance"`
+
+	// RawTenengradVariance はTenengrad法（Sobel勾配分散）の生値。
+	// ラプラシアンよりノイズに強い鮮明度指標です。
+	RawTenengradVariance float64 `json:"raw_tenengrad_variance"`
+
+	// EdgeDecayRatio はエッジ減衰率（0.0〜1.0）。
+	// 画像に意図的なブラーを適用した際のエッジの減少割合。
+	// 高いほどピントが合っています（被写体に依存しない相対指標）。
+	EdgeDecayRatio float64 `json:"edge_decay_ratio"`
+
+	// MeanBrightness は画像の平均輝度（0〜255）。
+	// 逆光や露出の診断に使用します。
+	MeanBrightness float64 `json:"mean_brightness"`
+
+	// EstimatedBlurLevel はラプラシアン分散によるブレ推定値。
+	// 低いほどブレが大きいことを示します。
+	EstimatedBlurLevel float64 `json:"estimated_blur_level"`
+
+	// OriginalWidth は入力画像の元の幅（ピクセル）。
+	OriginalWidth int `json:"original_width"`
+
+	// OriginalHeight は入力画像の元の高さ（ピクセル）。
+	OriginalHeight int `json:"original_height"`
+
+	// AnalyzedWidth は鮮明度計算に使用した正規化後の幅（ピクセル）。
+	AnalyzedWidth int `json:"analyzed_width"`
+
+	// AnalyzedHeight は鮮明度計算に使用した正規化後の高さ（ピクセル）。
+	AnalyzedHeight int `json:"analyzed_height"`
+}
+
 // ============================================================================
 // 前処理関数
 // ============================================================================
@@ -1008,19 +1050,23 @@ func CropFace(imageData []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// CalculateFaceSharpness は、画像内の顔の鮮明度スコアを計算します。
-// 複数の顔が検出された場合は、最も高いスコアを返します。
-func CalculateFaceSharpness(imageData []byte) (float64, error) {
+// CalculateFaceSharpness は、画像内の顔の鮮明度を分析し、正規化されたスコアと診断情報を返します。
+// 強化された顔検出パイプラインで検出した顔の中心60%領域（目・鼻・口）のみを評価対象とし、
+// 撮影環境やカメラの品質に依存しない客観的な指標を提供します。
+// 複数の顔が検出された場合は、最も高いスコアの結果を返します。
+func CalculateFaceSharpness(imageData []byte) (SharpnessResult, error) {
 	img, dets, err := detectFaces(imageData)
 	if err != nil {
-		return 0, err
+		return SharpnessResult{}, err
 	}
 
 	if len(dets) == 0 {
-		return 0, fmt.Errorf("顔が検出されませんでした")
+		return SharpnessResult{}, fmt.Errorf("顔が検出されませんでした")
 	}
 
-	maxSharpness := 0.0
+	var bestResult SharpnessResult
+	bestScore := -1.0
+
 	// 検出された各顔に対して鮮明度を計算
 	for _, det := range dets {
 		faceRect := clipRect(detectionRect(det), img.Bounds())
@@ -1037,36 +1083,458 @@ func CalculateFaceSharpness(imageData []byte) (float64, error) {
 		// グレースケール画像に変換
 		grayImg := convertToGrayscale(faceImg)
 
-		// ラプラシアンフィルタを適用して鮮明度を計算
-		sharpness := calculateLaplacianVariance(grayImg)
+		// 顔中心60%領域のみを抽出（髪・服・背景を排除）
+		centerGray := extractFaceCenterRegion(grayImg, faceCenterRatio)
 
-		if sharpness > maxSharpness {
-			maxSharpness = sharpness
+		// 正規化鮮明度パイプラインで計算
+		result := calculateNormalizedSharpness(centerGray, faceRect.Dx(), faceRect.Dy())
+
+		if result.NormalizedScore > bestScore {
+			bestScore = result.NormalizedScore
+			bestResult = result
 		}
 	}
 
-	return maxSharpness, nil
+	return bestResult, nil
 }
 
-// CalculateSharpness は、画像データの鮮明度スコアを計算します。
-func CalculateSharpness(imageData []byte) (float64, error) {
+// CalculateSharpness は、画像データの鮮明度を分析し、正規化されたスコアと診断情報を返します。
+// 画像全体の鮮明度を評価します（顔に限定しない汎用評価）。
+func CalculateSharpness(imageData []byte) (SharpnessResult, error) {
 	if len(imageData) == 0 {
-		return 0, fmt.Errorf("画像データが空です")
+		return SharpnessResult{}, fmt.Errorf("画像データが空です")
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(imageData))
 	if err != nil {
-		return 0, fmt.Errorf("画像のデコードに失敗しました: %v", err)
+		return SharpnessResult{}, fmt.Errorf("画像のデコードに失敗しました: %v", err)
 	}
 
+	bounds := img.Bounds()
 	grayImg := convertToGrayscale(img)
-	sharpness := calculateLaplacianVariance(grayImg)
-	return sharpness, nil
+	result := calculateNormalizedSharpness(grayImg, bounds.Dx(), bounds.Dy())
+	return result, nil
+}
+
+// ============================================================================
+// 正規化鮮明度パイプライン（商用レベル）
+// ============================================================================
+
+const (
+	// 鮮明度計算の基準サイズ（ピクセル）
+	// カメラの画素数に依存しないよう、この大きさに統一してから計算する
+	sharpnessNormalizeSize = 128
+
+	// エッジ減衰率計算用のガウシアンブラーのカーネルサイズ
+	edgeDecayBlurKernelSize = 5
+
+	// エッジ減衰率計算用のガウシアンブラーのσ値
+	edgeDecayBlurSigma = 2.0
+
+	// バイラテラルフィルタのパラメータ
+	bilateralD          = 5    // フィルタの直径
+	bilateralSigmaColor = 50.0 // 色空間のσ
+	bilateralSigmaSpace = 50.0 // 座標空間のσ
+
+	// 顔中心マスクの比率（顔矩形に対する中心領域の割合）
+	faceCenterRatio = 0.6
+
+	// スコアマッピング用パラメータ（シグモイド関数）
+	sigmoidMidpoint  = 0.45 // 減衰率がこの値で約50点
+	sigmoidSteepness = 10.0 // カーブの急峻さ
+)
+
+// normalizeSize は2D画像データを基準サイズにリサイズします（Bilinear補間）。
+// カメラの画素数・距離に依存しない評価を実現します。
+func normalizeSize(gray [][]float64, targetSize int) [][]float64 {
+	srcH := len(gray)
+	if srcH == 0 {
+		return gray
+	}
+	srcW := len(gray[0])
+	if srcW == 0 {
+		return gray
+	}
+
+	result := make([][]float64, targetSize)
+	scaleX := float64(srcW) / float64(targetSize)
+	scaleY := float64(srcH) / float64(targetSize)
+
+	for y := 0; y < targetSize; y++ {
+		result[y] = make([]float64, targetSize)
+		srcY := float64(y) * scaleY
+		y0 := int(srcY)
+		y1 := y0 + 1
+		if y1 >= srcH {
+			y1 = srcH - 1
+		}
+		dy := srcY - float64(y0)
+
+		for x := 0; x < targetSize; x++ {
+			srcX := float64(x) * scaleX
+			x0 := int(srcX)
+			x1 := x0 + 1
+			if x1 >= srcW {
+				x1 = srcW - 1
+			}
+			dx := srcX - float64(x0)
+
+			// Bilinear interpolation
+			v00 := gray[y0][x0]
+			v10 := gray[y0][x1]
+			v01 := gray[y1][x0]
+			v11 := gray[y1][x1]
+			result[y][x] = v00*(1-dx)*(1-dy) + v10*dx*(1-dy) + v01*(1-dx)*dy + v11*dx*dy
+		}
+	}
+	return result
+}
+
+// normalizeContrast はMin-Max正規化で輝度レンジを0〜255に引き伸ばします。
+// 逆光や露出の違いによるスコア変動を排除します。
+func normalizeContrast(gray [][]float64) [][]float64 {
+	if len(gray) == 0 {
+		return gray
+	}
+
+	minVal := math.MaxFloat64
+	maxVal := -math.MaxFloat64
+	for y := range gray {
+		for x := range gray[y] {
+			v := gray[y][x]
+			if v < minVal {
+				minVal = v
+			}
+			if v > maxVal {
+				maxVal = v
+			}
+		}
+	}
+
+	rangeVal := maxVal - minVal
+	if rangeVal < 1.0 {
+		// ほぼ均一な画像（真っ黒or真っ白）→ そのまま返す
+		return gray
+	}
+
+	result := make([][]float64, len(gray))
+	for y := range gray {
+		result[y] = make([]float64, len(gray[y]))
+		for x := range gray[y] {
+			result[y][x] = (gray[y][x] - minVal) / rangeVal * 255.0
+		}
+	}
+	return result
+}
+
+// applyBilateralDenoise はバイラテラルフィルタでカメラノイズを除去します。
+// エッジは保持しつつ、センサーノイズのような微小な輝度変動のみを平滑化します。
+// 簡易実装（純Go、OpenCV不要）: 各ピクセルの周囲を距離と輝度差で重み付き平均します。
+func applyBilateralDenoise(gray [][]float64) [][]float64 {
+	h := len(gray)
+	if h == 0 {
+		return gray
+	}
+	w := len(gray[0])
+	r := bilateralD / 2
+	result := make([][]float64, h)
+
+	for y := 0; y < h; y++ {
+		result[y] = make([]float64, w)
+		for x := 0; x < w; x++ {
+			sumWeight := 0.0
+			sumValue := 0.0
+			centerVal := gray[y][x]
+
+			for dy := -r; dy <= r; dy++ {
+				for dx := -r; dx <= r; dx++ {
+					ny, nx := y+dy, x+dx
+					if ny < 0 || ny >= h || nx < 0 || nx >= w {
+						continue
+					}
+					neighborVal := gray[ny][nx]
+					spatialDist := float64(dx*dx + dy*dy)
+					colorDist := (neighborVal - centerVal) * (neighborVal - centerVal)
+					weight := math.Exp(-spatialDist/(2*bilateralSigmaSpace*bilateralSigmaSpace)) *
+						math.Exp(-colorDist/(2*bilateralSigmaColor*bilateralSigmaColor))
+					sumWeight += weight
+					sumValue += weight * neighborVal
+				}
+			}
+			if sumWeight > 0 {
+				result[y][x] = sumValue / sumWeight
+			} else {
+				result[y][x] = centerVal
+			}
+		}
+	}
+	return result
+}
+
+// calculateTenengradVariance はTenengrad法（Sobel勾配の分散）で鮮明度を計算します。
+// ラプラシアン（2階微分）と異なり、Sobel（1階微分）は高周波ノイズに強い特性があります。
+func calculateTenengradVariance(gray [][]float64) float64 {
+	h := len(gray)
+	if h <= 2 {
+		return 0
+	}
+	w := len(gray[0])
+	if w <= 2 {
+		return 0
+	}
+
+	sum := 0.0
+	sumSq := 0.0
+	count := 0
+
+	for y := 1; y < h-1; y++ {
+		for x := 1; x < w-1; x++ {
+			// Sobel X: [-1 0 1; -2 0 2; -1 0 1]
+			gx := -gray[y-1][x-1] + gray[y-1][x+1] +
+				-2*gray[y][x-1] + 2*gray[y][x+1] +
+				-gray[y+1][x-1] + gray[y+1][x+1]
+
+			// Sobel Y: [-1 -2 -1; 0 0 0; 1 2 1]
+			gy := -gray[y-1][x-1] - 2*gray[y-1][x] - gray[y-1][x+1] +
+				gray[y+1][x-1] + 2*gray[y+1][x] + gray[y+1][x+1]
+
+			// Tenengrad = Gx^2 + Gy^2
+			tenengrad := gx*gx + gy*gy
+			sum += tenengrad
+			sumSq += tenengrad * tenengrad
+			count++
+		}
+	}
+
+	if count == 0 {
+		return 0
+	}
+	mean := sum / float64(count)
+	variance := sumSq/float64(count) - mean*mean
+	return math.Abs(variance)
+}
+
+// applyGaussianBlur2D はガウシアンブラーを2D配列に適用します（エッジ減衰率計算用）。
+func applyGaussianBlur2D(gray [][]float64, kernelSize int, sigma float64) [][]float64 {
+	h := len(gray)
+	if h == 0 {
+		return gray
+	}
+	w := len(gray[0])
+	r := kernelSize / 2
+
+	// ガウシアンカーネルを生成
+	kernel := make([][]float64, kernelSize)
+	kernelSum := 0.0
+	for ky := 0; ky < kernelSize; ky++ {
+		kernel[ky] = make([]float64, kernelSize)
+		for kx := 0; kx < kernelSize; kx++ {
+			dy := float64(ky - r)
+			dx := float64(kx - r)
+			kernel[ky][kx] = math.Exp(-(dx*dx + dy*dy) / (2 * sigma * sigma))
+			kernelSum += kernel[ky][kx]
+		}
+	}
+	// 正規化
+	for ky := 0; ky < kernelSize; ky++ {
+		for kx := 0; kx < kernelSize; kx++ {
+			kernel[ky][kx] /= kernelSum
+		}
+	}
+
+	result := make([][]float64, h)
+	for y := 0; y < h; y++ {
+		result[y] = make([]float64, w)
+		for x := 0; x < w; x++ {
+			val := 0.0
+			for ky := 0; ky < kernelSize; ky++ {
+				for kx := 0; kx < kernelSize; kx++ {
+					ny := y + ky - r
+					nx := x + kx - r
+					if ny < 0 {
+						ny = 0
+					}
+					if ny >= h {
+						ny = h - 1
+					}
+					if nx < 0 {
+						nx = 0
+					}
+					if nx >= w {
+						nx = w - 1
+					}
+					val += gray[ny][nx] * kernel[ky][kx]
+				}
+			}
+			result[y][x] = val
+		}
+	}
+	return result
+}
+
+// calculateEdgeDecayRatio はエッジ減衰率を計算します。
+// 元画像と意図的にぼかした画像のエッジ強度の比率を取ることで、
+// 被写体のテクスチャ量に依存しない、純粋な「ピントの合い具合」を測定します。
+func calculateEdgeDecayRatio(gray [][]float64) float64 {
+	// 元画像のエッジ強度
+	origEnergy := calculateEdgeEnergy(gray)
+	if origEnergy < 1.0 {
+		// ほぼエッジがない（真っ白や真っ黒の画像）→ 最低スコア
+		return 0
+	}
+
+	// 意図的にぼかした画像のエッジ強度
+	blurred := applyGaussianBlur2D(gray, edgeDecayBlurKernelSize, edgeDecayBlurSigma)
+	blurredEnergy := calculateEdgeEnergy(blurred)
+
+	// 減衰率 = 1 - (ぼかし後のエッジ / 元のエッジ)
+	// ピントが合っている → ぼかすとエッジが大幅に減る → 減衰率が高い
+	// ピントがボケている → ぼかしてもエッジあまり変わらない → 減衰率が低い
+	ratio := 1.0 - blurredEnergy/origEnergy
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	return ratio
+}
+
+// calculateEdgeEnergy はラプラシアンベースのエッジエネルギー（二乗和の平均）を計算します。
+func calculateEdgeEnergy(gray [][]float64) float64 {
+	h := len(gray)
+	if h <= 2 {
+		return 0
+	}
+	w := len(gray[0])
+	if w <= 2 {
+		return 0
+	}
+
+	sum := 0.0
+	count := 0
+	for y := 1; y < h-1; y++ {
+		for x := 1; x < w-1; x++ {
+			lap := gray[y][x]*(-4) + gray[y-1][x] + gray[y+1][x] + gray[y][x-1] + gray[y][x+1]
+			sum += lap * lap
+			count++
+		}
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+// extractFaceCenterRegion は顔画像の中心領域のみを切り出します。
+// 髪の毛・服装・背景のテクスチャを排除し、目・鼻・口が集中する領域だけを評価対象にします。
+func extractFaceCenterRegion(gray [][]float64, ratio float64) [][]float64 {
+	h := len(gray)
+	if h == 0 {
+		return gray
+	}
+	w := len(gray[0])
+
+	marginX := int(float64(w) * (1 - ratio) / 2)
+	marginY := int(float64(h) * (1 - ratio) / 2)
+	newW := w - 2*marginX
+	newH := h - 2*marginY
+
+	if newW <= 2 || newH <= 2 {
+		return gray
+	}
+
+	result := make([][]float64, newH)
+	for y := 0; y < newH; y++ {
+		result[y] = make([]float64, newW)
+		copy(result[y], gray[y+marginY][marginX:marginX+newW])
+	}
+	return result
+}
+
+// decayRatioToScore はエッジ減衰率（0.0〜1.0）を0〜100点に変換します。
+// シグモイド関数で非線形にマッピングし、人間の知覚に近い分布にします。
+func decayRatioToScore(ratio float64) float64 {
+	// シグモイド: score = 100 / (1 + exp(-steepness * (ratio - midpoint)))
+	score := 100.0 / (1.0 + math.Exp(-sigmoidSteepness*(ratio-sigmoidMidpoint)))
+	if score < 0 {
+		score = 0
+	}
+	if score > 100 {
+		score = 100
+	}
+	return math.Round(score*10) / 10 // 小数第1位まで
+}
+
+// calculateMeanBrightnessFromGray はグレースケール2D配列の平均輝度を計算します。
+func calculateMeanBrightnessFromGray(gray [][]float64) float64 {
+	if len(gray) == 0 {
+		return 0
+	}
+	sum := 0.0
+	count := 0
+	for y := range gray {
+		for x := range gray[y] {
+			sum += gray[y][x]
+			count++
+		}
+	}
+	if count == 0 {
+		return 0
+	}
+	return sum / float64(count)
+}
+
+// calculateNormalizedSharpness は正規化鮮明度パイプラインの全ステップを統合して実行します。
+// 入力: グレースケール画像（任意サイズ）、元画像の幅・高さ
+// 出力: SharpnessResult
+func calculateNormalizedSharpness(gray [][]float64, origWidth, origHeight int) SharpnessResult {
+	// まず生のラプラシアン分散を計算（参考値として返却）
+	rawLaplacian := calculateLaplacianVariance(gray)
+
+	// 平均輝度を計算（診断情報として返却）
+	meanBrightness := calculateMeanBrightnessFromGray(gray)
+
+	// ブレ推定（正規化前の生データで）
+	rawBlurLevel := rawLaplacian // ラプラシアン分散がそのままブレ推定値
+
+	// ステップ1: サイズ正規化
+	normalized := normalizeSize(gray, sharpnessNormalizeSize)
+	analyzedSize := sharpnessNormalizeSize
+
+	// ステップ2: コントラスト正規化
+	normalized = normalizeContrast(normalized)
+
+	// ステップ3: ノイズ除去
+	denoised := applyBilateralDenoise(normalized)
+
+	// Tenengrad法の生値（正規化済み画像に対して計算）
+	rawTenengrad := calculateTenengradVariance(denoised)
+
+	// ステップ4: エッジ減衰率（相対評価）
+	edgeDecay := calculateEdgeDecayRatio(denoised)
+
+	// スコア変換（0〜100点）
+	score := decayRatioToScore(edgeDecay)
+
+	return SharpnessResult{
+		NormalizedScore:      score,
+		RawLaplacianVariance: math.Round(rawLaplacian*1000) / 1000,
+		RawTenengradVariance: math.Round(rawTenengrad*1000) / 1000,
+		EdgeDecayRatio:       math.Round(edgeDecay*10000) / 10000,
+		MeanBrightness:       math.Round(meanBrightness*10) / 10,
+		EstimatedBlurLevel:   math.Round(rawBlurLevel*1000) / 1000,
+		OriginalWidth:        origWidth,
+		OriginalHeight:       origHeight,
+		AnalyzedWidth:        analyzedSize,
+		AnalyzedHeight:       analyzedSize,
+	}
 }
 
 // ============================================================================
 // 画像解析ヘルパー
 // ============================================================================
+
 
 // convertToGrayscale は画像をグレースケールに変換します
 func convertToGrayscale(img image.Image) [][]float64 {

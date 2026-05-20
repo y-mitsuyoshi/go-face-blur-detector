@@ -62,16 +62,14 @@ func main() {
 		}
 
 		// 鮮明度を計算
-		sharpness, err := facedetector.CalculateSharpness(imgData)
+		result, err := facedetector.CalculateSharpness(imgData)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "鮮明度の計算に失敗しました: " + err.Error()})
 			return
 		}
 
 		// 結果を返す
-		c.JSON(http.StatusOK, gin.H{
-			"sharpness_score": sharpness,
-		})
+		c.JSON(http.StatusOK, result)
 	})
 
 	// 顔検出（顔のみ）エンドポイント
@@ -92,16 +90,14 @@ func main() {
 		}
 
 		// 顔の鮮明度を計算
-		sharpness, err := facedetector.CalculateFaceSharpness(imgData)
+		result, err := facedetector.CalculateFaceSharpness(imgData)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "鮮明度の計算に失敗しました: " + err.Error()})
 			return
 		}
 
 		// 結果を返す
-		c.JSON(http.StatusOK, gin.H{
-			"sharpness_score": sharpness,
-		})
+		c.JSON(http.StatusOK, result)
 	})
 
 	// 顔検出の可視化エンドポイント
