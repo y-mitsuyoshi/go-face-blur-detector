@@ -7,7 +7,7 @@ DOCKER_IMAGE_LATEST := $(PROJECT_NAME):latest
 # Docker compose ファイル
 DOCKER_COMPOSE_FILE := docker-compose.yml
 
-.PHONY: all build run clean test help deps tidy fmt lint dev up down stop logs restart check-docker test-coverage
+.PHONY: all build run clean test help deps tidy fmt lint dev up down stop logs restart check-docker test-coverage download-models
 
 # デフォルトターゲット
 all: build
@@ -31,6 +31,7 @@ help:
 	@echo "  lint           - Docker Composeでコードをリント"
 	@echo "  clean          - ビルド成果物をクリーンアップ"
 	@echo "  check-docker   - Docker環境の確認"
+	@echo "  download-models - DNNモデルファイルをダウンロード（顔検出精度向上）"
 
 # 依存関係の更新
 deps: check-docker
@@ -125,6 +126,12 @@ dev-init: check-docker
 	$(MAKE) deps
 	$(MAKE) tidy
 	$(DOCKER_COMPOSE_CMD) build
+
+# DNNモデルファイルのダウンロード
+download-models:
+	@echo "DNNモデルファイルをダウンロード中..."
+	@bash scripts/download_models.sh
+	@echo "モデルのダウンロードが完了しました"
 
 # バージョン情報表示
 version:
