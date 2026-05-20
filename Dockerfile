@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libopencv-dev \
     libopencv-contrib-dev \
+    curl \
+    ca-certificates \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -21,7 +23,7 @@ ENV GOROOT="/usr/lib/go-1.21"
 WORKDIR /app
 
 # Go modulesファイルをコピーして依存関係をダウンロード
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 # ソースコードをコピー
@@ -30,9 +32,12 @@ COPY . .
 # 依存関係を整理
 RUN go mod tidy
 
+# DNNモデルファイルをダウンロード（顔検出精度向上用）
+RUN bash scripts/download_models.sh
+
 # アプリケーションをビルド（Arucoコンポーネントを無効にして）
 ENV CGO_CPPFLAGS="-I/usr/include/opencv4"
-ENV CGO_LDFLAGS="-lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_objdetect"
+ENV CGO_LDFLAGS="-lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_objdetect -lopencv_dnn"
 ENV PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig"
 RUN CGO_ENABLED=1 go build -tags "!aruco" -ldflags "-s -w" -o face-blur-detector ./cmd/api
 
@@ -50,9 +55,10 @@ RUN apt-get update && apt-get install -y \
 # 作業ディレクトリを設定
 WORKDIR /app
 
-# ビルドステージからバイナリとカスケードファイルをコピー
+# ビルドステージからバイナリ、カスケードファイル、DNNモデルをコピー
 COPY --from=builder /app/face-blur-detector /usr/local/bin/
 COPY --from=builder /app/internal/facedetector/cascade ./cascade
+COPY --from=builder /app/internal/facedetector/models ./models
 
 # 実行権限を付与
 RUN chmod +x /usr/local/bin/face-blur-detector

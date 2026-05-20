@@ -55,3 +55,10 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+.aider*
+
+# DNN Model files (download via scripts/download_models.sh)
+internal/facedetector/models/*.caffemodel
+internal/facedetector/models/*.prototxt
+models/*.caffemodel
+models/*.prototxt
