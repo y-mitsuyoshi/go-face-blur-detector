@@ -8,11 +8,13 @@ import (
 	"image/draw"
 	_ "image/jpeg" // image.Decodeでjpeg形式をサポートするために必要
 	"image/png"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 
 	"gocv.io/x/gocv"
 )
@@ -56,6 +58,69 @@ const (
 	darkThreshold   = 80.0  // この値以下なら「暗い」と判定
 	brightThreshold = 180.0 // この値以上なら「明るすぎる」と判定
 )
+
+// ============================================================================
+// オブジェクトプール (sync.Pool) による商用キャッシュ化
+// ============================================================================
+
+var (
+	dnnNetPool  sync.Pool
+	initLogOnce sync.Once
+
+	cascadePools   map[string]*sync.Pool
+	cascadePoolsMu sync.RWMutex
+)
+
+func init() {
+	// dnnNetPool の初期化
+	dnnNetPool = sync.Pool{
+		New: func() interface{} {
+			protoPath, modelPath, found := findDNNModelFiles()
+			if !found {
+				return nil
+			}
+			net := gocv.ReadNetFromCaffe(protoPath, modelPath)
+			if net.Empty() {
+				net.Close()
+				return nil
+			}
+			return &net
+		},
+	}
+
+	// cascadePools の初期化
+	cascadePools = make(map[string]*sync.Pool)
+}
+
+func getCascadePool(cascadeFile string) *sync.Pool {
+	cascadePoolsMu.RLock()
+	pool, ok := cascadePools[cascadeFile]
+	cascadePoolsMu.RUnlock()
+	if ok {
+		return pool
+	}
+
+	cascadePoolsMu.Lock()
+	defer cascadePoolsMu.Unlock()
+	// ダブルチェック
+	pool, ok = cascadePools[cascadeFile]
+	if ok {
+		return pool
+	}
+
+	pool = &sync.Pool{
+		New: func() interface{} {
+			classifier := gocv.NewCascadeClassifier()
+			if !classifier.Load(cascadeFile) {
+				classifier.Close()
+				return nil
+			}
+			return &classifier
+		},
+	}
+	cascadePools[cascadeFile] = pool
+	return pool
+}
 
 // cascadeFiles はHaar Cascade分類器のファイルパスリスト
 var cascadeFiles = []string{
@@ -212,10 +277,14 @@ func applyAdaptivePreprocessing(mat gocv.Mat) gocv.Mat {
 		ch.Close()
 	}
 
-	gocv.CvtColor(enhanced, &processed, gocv.ColorLabToBGR)
+	// 古い processed を解放し、上書きのリークを避けるために新しいMatに変換
+	result := gocv.NewMat()
+	gocv.CvtColor(enhanced, &result, gocv.ColorLabToBGR)
+	
+	processed.Close()
 	enhanced.Close()
 
-	return processed
+	return result
 }
 
 // applySharpeningFilter はアンシャープマスキングを適用して、ブレた画像のエッジを強調します。
@@ -267,21 +336,30 @@ func estimateBlurLevel(mat gocv.Mat) float64 {
 // detectWithDNN はSSD DNN モデルを使用して顔を検出します。
 // 複数の前処理バリエーションで検出を試み、結果を統合します。
 func detectWithDNN(mat gocv.Mat, minConfidence float32) []detectionWithConfidence {
-	protoPath, modelPath, found := findDNNModelFiles()
-	if !found {
-		return nil
-	}
+	// 初回実行時に診断ログを出力
+	initLogOnce.Do(func() {
+		protoPath, modelPath, found := findDNNModelFiles()
+		if found {
+			log.Printf("[FaceDetector] DNN models found. Using SSD ResNet-10 (Caffe). Proto: %s, Model: %s\n", protoPath, modelPath)
+		} else {
+			log.Println("[FaceDetector] WARNING: DNN models NOT found. Falling back to Haar Cascades.")
+		}
+	})
 
-	net := gocv.ReadNetFromCaffe(protoPath, modelPath)
-	if net.Empty() {
+	netVal := dnnNetPool.Get()
+	if netVal == nil {
 		return nil
 	}
-	defer net.Close()
+	netPtr := netVal.(*gocv.Net)
+	if netPtr.Empty() {
+		return nil
+	}
+	defer dnnNetPool.Put(netPtr)
 
 	var allDetections []detectionWithConfidence
 
 	// メイン画像での検出
-	dets := runDNNInference(net, mat, minConfidence)
+	dets := runDNNInference(*netPtr, mat, minConfidence)
 	allDetections = append(allDetections, dets...)
 
 	return allDetections
@@ -337,33 +415,41 @@ func detectWithCascades(mat gocv.Mat, minNeighbors int) []detectionWithConfidenc
 	var allDetections []detectionWithConfidence
 
 	for _, cascadeFile := range cascadeFiles {
-		classifier := gocv.NewCascadeClassifier()
-		if !classifier.Load(cascadeFile) {
-			classifier.Close()
-			continue
-		}
+		found := false
+		_ = func() error {
+			pool := getCascadePool(cascadeFile)
+			classVal := pool.Get()
+			if classVal == nil {
+				return nil
+			}
+			classifierPtr := classVal.(*gocv.CascadeClassifier)
+			defer pool.Put(classifierPtr)
 
-		rects := classifier.DetectMultiScaleWithParams(
-			mat,
-			1.05,             // scaleFactor: 小さい値ほど検出漏れが減るが遅くなる
-			minNeighbors,     // minNeighbors: 低いほど検出しやすいが誤検出が増える
-			0,                // flags
-			image.Point{X: minFaceSize, Y: minFaceSize}, // minSize
-			image.Point{},    // maxSize: 制限なし
-		)
+			rects := classifierPtr.DetectMultiScaleWithParams(
+				mat,
+				1.05,             // scaleFactor: 小さい値ほど検出漏れが減るが遅くなる
+				minNeighbors,     // minNeighbors: 低いほど検出しやすいが誤検出が増える
+				0,                // flags
+				image.Point{X: minFaceSize, Y: minFaceSize}, // minSize
+				image.Point{},    // maxSize: 制限なし
+			)
 
-		classifier.Close()
+			for _, r := range rects {
+				allDetections = append(allDetections, detectionWithConfidence{
+					rect:       r,
+					confidence: 0, // Haar Cascadeは信頼度スコアを返さない
+					source:     "cascade",
+				})
+			}
 
-		for _, r := range rects {
-			allDetections = append(allDetections, detectionWithConfidence{
-				rect:       r,
-				confidence: 0, // Haar Cascadeは信頼度スコアを返さない
-				source:     "cascade",
-			})
-		}
+			if len(rects) > 0 {
+				found = true
+			}
+			return nil
+		}()
 
 		// 何か見つかったらそのカスケードで十分
-		if len(rects) > 0 {
+		if found {
 			break
 		}
 	}

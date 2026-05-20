@@ -3,6 +3,7 @@ package facedetector
 import (
 	"image"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -350,4 +351,35 @@ func TestAddMargin(t *testing.T) {
 	if result != expected {
 		t.Errorf("addMargin(%v, 0.1) = %v, want %v", rect, result, expected)
 	}
+}
+
+// ============================================================================
+// 並行性（スレッドセーフティ）テスト
+// ============================================================================
+
+func TestDrawFaceRects_Parallel(t *testing.T) {
+	imageData, err := os.ReadFile("testdata/selfie1.jpg")
+	if err != nil {
+		t.Fatalf("Failed to read test image: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	numGoroutines := 5
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			resultImage, err := DrawFaceRects(imageData)
+			if err != nil {
+				t.Errorf("[Goroutine %d] DrawFaceRects failed: %v", id, err)
+				return
+			}
+			if len(resultImage) == 0 {
+				t.Errorf("[Goroutine %d] Resulting image is empty", id)
+			}
+		}(i)
+	}
+
+	wg.Wait()
 }
