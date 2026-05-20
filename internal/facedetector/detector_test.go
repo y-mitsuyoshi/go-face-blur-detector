@@ -1,6 +1,7 @@
 package facedetector
 
 import (
+	"image"
 	"os"
 	"testing"
 )
