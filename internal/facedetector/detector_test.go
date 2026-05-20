@@ -95,15 +95,20 @@ func TestCalculateSharpness_SharpImage(t *testing.T) {
 		t.Fatalf("Failed to read test image: %v", err)
 	}
 
-	sharpness, err := CalculateSharpness(imageData)
+	result, err := CalculateSharpness(imageData)
 	if err != nil {
 		t.Fatalf("CalculateSharpness failed: %v", err)
 	}
 
-	if sharpness <= 0 {
-		t.Fatalf("Expected positive sharpness score, got %f", sharpness)
+	if result.NormalizedScore <= 0 {
+		t.Fatalf("Expected positive normalized score, got %f", result.NormalizedScore)
 	}
-	t.Logf("Sharpness score for sharp image: %f", sharpness)
+	if result.NormalizedScore > 100 {
+		t.Fatalf("Normalized score should be <= 100, got %f", result.NormalizedScore)
+	}
+	t.Logf("Normalized score: %.1f, EdgeDecay: %.4f, RawLaplacian: %.3f, RawTenengrad: %.3f, Brightness: %.1f",
+		result.NormalizedScore, result.EdgeDecayRatio, result.RawLaplacianVariance,
+		result.RawTenengradVariance, result.MeanBrightness)
 }
 
 func TestCalculateFaceSharpness_SharpFace(t *testing.T) {
@@ -112,15 +117,20 @@ func TestCalculateFaceSharpness_SharpFace(t *testing.T) {
 		t.Fatalf("Failed to read test image: %v", err)
 	}
 
-	sharpness, err := CalculateFaceSharpness(imageData)
+	result, err := CalculateFaceSharpness(imageData)
 	if err != nil {
 		t.Fatalf("CalculateFaceSharpness failed: %v", err)
 	}
 
-	if sharpness <= 0 {
-		t.Fatalf("Expected positive sharpness score, got %f", sharpness)
+	if result.NormalizedScore <= 0 {
+		t.Fatalf("Expected positive normalized score, got %f", result.NormalizedScore)
 	}
-	t.Logf("Face sharpness score for sharp image: %f", sharpness)
+	if result.NormalizedScore > 100 {
+		t.Fatalf("Normalized score should be <= 100, got %f", result.NormalizedScore)
+	}
+	t.Logf("Face normalized score: %.1f, EdgeDecay: %.4f, RawLaplacian: %.3f, OrigSize: %dx%d, AnalyzedSize: %dx%d",
+		result.NormalizedScore, result.EdgeDecayRatio, result.RawLaplacianVariance,
+		result.OriginalWidth, result.OriginalHeight, result.AnalyzedWidth, result.AnalyzedHeight)
 }
 
 // ============================================================================
@@ -204,21 +214,61 @@ func TestSharpnessComparison_FaceImages(t *testing.T) {
 		t.Fatalf("Failed to read blurred face image: %v", err)
 	}
 
-	sharpScore, err := CalculateSharpness(sharpData)
+	sharpResult, err := CalculateSharpness(sharpData)
 	if err != nil {
 		t.Fatalf("CalculateSharpness failed for sharp image: %v", err)
 	}
 
-	blurredScore, err := CalculateSharpness(blurredData)
+	blurredResult, err := CalculateSharpness(blurredData)
 	if err != nil {
 		t.Fatalf("CalculateSharpness failed for blurred image: %v", err)
 	}
 
-	t.Logf("Sharp image score: %f, Blurred image score: %f", sharpScore, blurredScore)
+	t.Logf("Sharp: score=%.1f, decay=%.4f | Blurred: score=%.1f, decay=%.4f",
+		sharpResult.NormalizedScore, sharpResult.EdgeDecayRatio,
+		blurredResult.NormalizedScore, blurredResult.EdgeDecayRatio)
 
-	if sharpScore <= blurredScore {
-		t.Errorf("Expected sharp image (%f) to have higher sharpness than blurred image (%f)",
-			sharpScore, blurredScore)
+	if sharpResult.NormalizedScore <= blurredResult.NormalizedScore {
+		t.Errorf("Expected sharp image score (%.1f) > blurred image score (%.1f)",
+			sharpResult.NormalizedScore, blurredResult.NormalizedScore)
+	}
+}
+
+func TestNormalizedSharpness_ScoreRange(t *testing.T) {
+	testFiles := []string{
+		"testdata/selfie1.jpg",
+		"testdata/face.jpg",
+		"testdata/face_blurred.jpg",
+		"testdata/selfie_blurry_1.jpg",
+	}
+
+	for _, file := range testFiles {
+		t.Run(file, func(t *testing.T) {
+			imageData, err := os.ReadFile(file)
+			if err != nil {
+				t.Skipf("Test image not available: %s", file)
+				return
+			}
+
+			result, err := CalculateSharpness(imageData)
+			if err != nil {
+				t.Fatalf("CalculateSharpness failed: %v", err)
+			}
+
+			if result.NormalizedScore < 0 || result.NormalizedScore > 100 {
+				t.Errorf("Score out of range [0, 100]: got %.1f", result.NormalizedScore)
+			}
+			if result.EdgeDecayRatio < 0 || result.EdgeDecayRatio > 1 {
+				t.Errorf("EdgeDecayRatio out of range [0, 1]: got %.4f", result.EdgeDecayRatio)
+			}
+			if result.AnalyzedWidth != 128 || result.AnalyzedHeight != 128 {
+				t.Errorf("Expected analyzed size 128x128, got %dx%d", result.AnalyzedWidth, result.AnalyzedHeight)
+			}
+
+			t.Logf("%s: score=%.1f, decay=%.4f, brightness=%.1f, origSize=%dx%d",
+				file, result.NormalizedScore, result.EdgeDecayRatio,
+				result.MeanBrightness, result.OriginalWidth, result.OriginalHeight)
+		})
 	}
 }
 
